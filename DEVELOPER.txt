@@ -1,0 +1,50 @@
+TillMate — see data in MongoDB Atlas when you run the app
+============================================================
+
+You need THREE things working at once:
+
+1) BACKEND CAN REACH ATLAS
+   - In backend folder: copy .env.example to .env if needed. Set MONGODB_URI and JWT_SECRET.
+   - If the server prints "whitelist" or "IP" errors, Atlas is blocking your PC:
+     cd backend
+     npm run atlas-ip
+     Copy the IP into MongoDB Atlas → Network Access → Add IP Address.
+     For local dev only you may add 0.0.0.0/0 (allow from anywhere). Wait ~1 minute.
+   - Start API:  cd backend && npm run dev
+   - You should see: [db] connected to MongoDB
+
+2) PHONE CAN REACH THE API (same Wi‑Fi or phone hotspot)
+   - In project root (next to package.json): .env must contain:
+     EXPO_PUBLIC_API_URL=http://YOUR_PC_IP:4000
+     Use the IPv4 from ipconfig for the adapter you use with the phone (include :4000).
+   - Restart Metro after changing .env: npx expo start
+   - Optional: on the phone browser open http://YOUR_PC_IP:4000/health — should respond.
+
+3) LOG IN ON THE PHONE
+   - After login, Metro should log lines like [TillMate sync] and the backend terminal:
+     [sync] MongoDB: N/M operations applied
+   - In Atlas, open Collections → users, products, sales (data is per logged-in user).
+
+If Atlas was fixed later but the app still shows no new data, log out and log in again
+so the app can obtain a JWT and run the upload queue again.
+
+4) WEB ADMIN DASHBOARD (desktop)
+   - backend/.env must set ADMIN_EMAIL and ADMIN_PASSWORD (same as bootstrap admin).
+   - Install UI deps once:  cd backend/admin-dashboard && npm install
+     If Vite fails with @rollup/rollup-win32-x64-msvc missing, run:
+       cd backend/admin-dashboard
+       rmdir /s /q node_modules
+       del package-lock.json
+       npm install
+   - Production-style (served by the API on port 4000):
+       cd backend && npm run admin:build
+       cd backend && npm run dev
+     Open http://localhost:4000/admin  (or http://YOUR_PC_IP:4000/admin from another machine)
+   - Hot reload while coding the UI (Vite on 5173, proxies /api to 4000):
+       Terminal A: cd backend && npm run dev
+       Terminal B: cd backend && npm run admin:dev
+     Open http://localhost:5173/
+   - On the login screen (non-production API), admin email/password from backend/.env are shown
+     and pre-filled for convenience. With NODE_ENV=production on the server, that hint is disabled.
+   - Sign in with ADMIN_EMAIL / ADMIN_PASSWORD. Merchants appear in the left list; click one
+     for products, sales, and total revenue.

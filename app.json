@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "TillMate",
+    "slug": "tillmate",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/tillmate.png",
+    "scheme": "tillmate",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.tillmate.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/images/tillmate.png",
+        "backgroundImage": "./assets/images/tillmate.png",
+        "monochromeImage": "./assets/images/tillmate.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/tillmate.png"
+    },
+    "extra": {
+      "apiUrl": "",
+      "router": {},
+      "eas": {
+        "projectId": "18234742-33f1-4f79-b1ab-0642cc566bab"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "react-native-thermal-printer-driver",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/tillmate.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ],
+      "expo-sqlite"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
