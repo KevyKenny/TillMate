@@ -6,6 +6,9 @@ import {
   Alert,
   Dimensions,
   FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,7 +17,7 @@ import {
   View,
 } from 'react-native';
 import { BarChart, LineChart } from 'react-native-chart-kit';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ReceiptModal from '../components/ReceiptModal';
 import ScreenHeader from '../components/ScreenHeader';
@@ -24,6 +27,7 @@ import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import { useThermalReceiptPrint } from '../hooks/useThermalReceiptPrint';
 import * as reportsService from '../services/reportsService';
+import * as salesService from '../services/salesService';
 import { getPresetRange } from '../utils/dateRange';
 import { formatHarare } from '../utils/datetime';
 
@@ -83,8 +87,9 @@ function eachDayInclusive(startYmd, endYmd) {
 export default function ReportsScreen() {
   const { colors } = useAppTheme();
   const { user } = useAuth();
-  const { dataVersion } = useCart();
+  const { dataVersion, notifyDataChanged } = useCart();
   const printThermalReceipt = useThermalReceiptPrint();
+  const insets = useSafeAreaInsets();
   const initial = getPresetRange('today');
   const [preset, setPreset] = useState(null);
   const [hasQueried, setHasQueried] = useState(false);
@@ -94,7 +99,7 @@ export default function ReportsScreen() {
   const [draftEnd, setDraftEnd] = useState(initial.endYmd);
   const [sales, setSales] = useState([]);
   const [productStats, setProductStats] = useState([]);
-  const [productView, setProductView] = useState('grid');
+  const [productView, setProductView] = useState('table');
   const [loading, setLoading] = useState(false);
   const [histReceipt, setHistReceipt] = useState(null);
   const [histVisible, setHistVisible] = useState(false);
@@ -105,6 +110,9 @@ export default function ReportsScreen() {
   const [advancedChart, setAdvancedChart] = useState('salesTrend');
   const [dailySalesSeries, setDailySalesSeries] = useState([]);
   const [lowStockAlerts, setLowStockAlerts] = useState(0);
+  const [reversalBusySaleId, setReversalBusySaleId] = useState(null);
+  const [reversalModal, setReversalModal] = useState(null);
+  const [reversalReason, setReversalReason] = useState('');
 
   const goBackToFilters = useCallback(() => {
     const t = getPresetRange('today');
@@ -122,6 +130,8 @@ export default function ReportsScreen() {
     setAdvancedChart('salesTrend');
     setDailySalesSeries([]);
     setLowStockAlerts(0);
+    setReversalModal(null);
+    setReversalReason('');
   }, []);
 
   const applyPreset = useCallback((id) => {
@@ -224,6 +234,77 @@ export default function ReportsScreen() {
     setHistVisible(true);
   };
 
+  const openReversalModal = async (sale) => {
+    if (!user?.id) return;
+    try {
+      const lines = await reportsService.getSaleLines(user.id, sale.id);
+      const eligible = lines.filter((l) => Number(l.netQuantity || 0) > 0);
+      if (!eligible.length) {
+        Alert.alert('Nothing to reverse', 'All items in this sale were already reversed.');
+        return;
+      }
+      setReversalReason('');
+      setReversalModal({
+        sale,
+        lines: eligible.map((l) => ({
+          ...l,
+          draftQty: '',
+        })),
+      });
+    } catch (e) {
+      Alert.alert('Error', e?.message ?? 'Could not load invoice lines.');
+    }
+  };
+
+  const submitReversalFromModal = async () => {
+    if (!reversalModal || !user?.id) return;
+    const linesToReverse = [];
+    for (const row of reversalModal.lines) {
+      const q = Math.max(0, parseInt(String(row.draftQty).trim(), 10) || 0);
+      if (q <= 0) continue;
+      const max = Number(row.netQuantity || 0);
+      if (q > max) {
+        Alert.alert('Invalid quantity', `${row.name}: you can reverse at most ${max} for this line.`);
+        return;
+      }
+      linesToReverse.push({ saleItemId: row.saleItemId, quantity: q });
+    }
+    if (!linesToReverse.length) {
+      Alert.alert('Enter quantities', 'Set how many units to reverse for at least one product line.');
+      return;
+    }
+    setReversalBusySaleId(reversalModal.sale.id);
+    try {
+      await salesService.reverseSaleItemsForUser(
+        user.id,
+        reversalModal.sale.id,
+        linesToReverse,
+        reversalReason.trim() || 'Sale reversal'
+      );
+      setReversalModal(null);
+      setReversalReason('');
+      await notifyDataChanged();
+      await load();
+      Alert.alert('Updated', 'Reversal applied. Stock and finance figures were updated!.');
+    } catch (e) {
+      Alert.alert('Reversal failed', e?.message ?? 'Could not reverse this sale.');
+    } finally {
+      setReversalBusySaleId(null);
+    }
+  };
+
+  const updateReversalDraft = (saleItemId, text) => {
+    setReversalModal((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        lines: prev.lines.map((row) =>
+          row.saleItemId === saleItemId ? { ...row, draftQty: text } : row
+        ),
+      };
+    });
+  };
+
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const totalSales = useMemo(
     () => sales.reduce((sum, s) => sum + Number(s.total || 0), 0),
@@ -231,14 +312,6 @@ export default function ReportsScreen() {
   );
   const totalSoldItems = useMemo(
     () => productStats.reduce((sum, p) => sum + Number(p.soldQty || 0), 0),
-    [productStats]
-  );
-  const totalSalesCount = useMemo(
-    () => productStats.reduce((sum, p) => sum + Number(p.salesCount || 0), 0),
-    [productStats]
-  );
-  const totalStock = useMemo(
-    () => productStats.reduce((sum, p) => sum + Number(p.remainingStock || 0), 0),
     [productStats]
   );
   const totalProductRevenue = useMemo(
@@ -305,6 +378,10 @@ export default function ReportsScreen() {
       <ScreenHeader title="Reports" subtitle="Pick a range, then view sales below" />
 
       {filtersVisible ? (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flexShrink: 0 }}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}>
         <ScrollView
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[styles.topSection, { backgroundColor: colors.surface }]}>
@@ -389,6 +466,7 @@ export default function ReportsScreen() {
             ))}
           </View>
         </ScrollView>
+        </KeyboardAvoidingView>
       ) : (
         <View style={[styles.resultsBar, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
           <Pressable onPress={goBackToFilters} style={styles.backHit} hitSlop={8}>
@@ -481,17 +559,6 @@ export default function ReportsScreen() {
                   <Text style={[styles.metricLabel, { color: colors.textMuted }]}>Per-product performance</Text>
                   <View style={styles.productViewTabs}>
                     <Pressable
-                      onPress={() => setProductView('grid')}
-                      style={[
-                        styles.productViewBtn,
-                        {
-                          backgroundColor: productView === 'grid' ? colors.primary : colors.inputBg,
-                          borderColor: colors.border,
-                        },
-                      ]}>
-                      <Text style={[styles.productViewBtnText, { color: productView === 'grid' ? colors.onPrimary : colors.text }]}>Grid</Text>
-                    </Pressable>
-                    <Pressable
                       onPress={() => setProductView('table')}
                       style={[
                         styles.productViewBtn,
@@ -501,6 +568,17 @@ export default function ReportsScreen() {
                         },
                       ]}>
                       <Text style={[styles.productViewBtnText, { color: productView === 'table' ? colors.onPrimary : colors.text }]}>Table</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setProductView('grid')}
+                      style={[
+                        styles.productViewBtn,
+                        {
+                          backgroundColor: productView === 'grid' ? colors.primary : colors.inputBg,
+                          borderColor: colors.border,
+                        },
+                      ]}>
+                      <Text style={[styles.productViewBtnText, { color: productView === 'grid' ? colors.onPrimary : colors.text }]}>Grid</Text>
                     </Pressable>
                   </View>
 
@@ -574,33 +652,31 @@ export default function ReportsScreen() {
                       )}
                     </View>
                   ) : (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.productTableWrap}>
-                      <View>
+                    <View style={styles.productTableWrap}>
+                      <View style={styles.productTableInner}>
                         <View style={[styles.productRow, styles.productHeadRow, { borderBottomColor: colors.border }]}>
                           <Text style={[styles.colName, styles.colHead, { color: colors.textMuted }]}>Product</Text>
-                          <Text style={[styles.colMini, styles.colHead, { color: colors.textMuted }]}>Sales</Text>
                           <Text style={[styles.colMini, styles.colHead, { color: colors.textMuted }]}>Sold</Text>
-                          <Text style={[styles.colMini, styles.colHead, { color: colors.textMuted }]}>Stock</Text>
-                          <Text style={[styles.colMoney, styles.colHead, { color: colors.textMuted }]}>Price/item</Text>
                           <Text style={[styles.colMoney, styles.colHead, { color: colors.textMuted }]}>Total</Text>
                           <Text style={[styles.colMoney, styles.colHead, { color: colors.textMuted }]}>Profit*</Text>
                         </View>
                         {productStats.length === 0 ? (
                           <View style={[styles.productRow, { borderBottomColor: colors.border }]}>
-                            <Text style={[styles.colName, { color: colors.textMuted }]}>No product sales in this range.</Text>
+                            <Text style={[styles.colName, styles.tableEmptyMessage, { color: colors.textMuted }]}>
+                              No product sales in this range.
+                            </Text>
                           </View>
                         ) : (
                           productStats.map((p) => (
                             <View key={String(p.productId)} style={[styles.productRow, { borderBottomColor: colors.border }]}>
-                              <Text style={[styles.colName, { color: colors.text }]} numberOfLines={1}>
+                              <Text style={[styles.colName, { color: colors.text }]} numberOfLines={1} ellipsizeMode="tail">
                                 {p.productName}
                               </Text>
-                              <Text style={[styles.colMini, { color: colors.text }]}>{Number(p.salesCount || 0)}</Text>
                               <Text style={[styles.colMini, { color: colors.text }]}>{Number(p.soldQty || 0)}</Text>
-                              <Text style={[styles.colMini, { color: colors.text }]}>{Number(p.remainingStock || 0)}</Text>
-                              <Text style={[styles.colMoney, { color: colors.text }]}>${Number(p.pricePerItem || 0).toFixed(2)}</Text>
-                              <Text style={[styles.colMoney, { color: colors.text }]}>${Number(p.salesBalance || 0).toFixed(2)}</Text>
-                              <Text style={[styles.colMoney, { color: PROFIT_GREEN }]}>
+                              <Text style={[styles.colMoney, { color: colors.text }]} numberOfLines={1}>
+                                ${Number(p.salesBalance || 0).toFixed(2)}
+                              </Text>
+                              <Text style={[styles.colMoney, { color: PROFIT_GREEN }]} numberOfLines={1}>
                                 {p.costPrice == null ? '—' : `$${Number(p.profit || 0).toFixed(2)}`}
                               </Text>
                             </View>
@@ -608,27 +684,22 @@ export default function ReportsScreen() {
                         )}
                         {productStats.length > 0 ? (
                           <View style={[styles.productRow, styles.productFootRow, { borderBottomColor: colors.border }]}>
-                            <Text style={[styles.colName, styles.footLabel, { color: colors.text }]}>Total Sales</Text>
-                            <Text style={[styles.colMini, styles.footValue, { color: colors.text }]}>
-                              {totalSalesCount}
+                            <Text style={[styles.colName, styles.footLabel, { color: colors.text }]} numberOfLines={1}>
+                              Total Sales
                             </Text>
                             <Text style={[styles.colMini, styles.footValue, { color: colors.text }]}>
                               {totalSoldItems}
                             </Text>
-                            <Text style={[styles.colMini, styles.footValue, { color: colors.text }]}>
-                              {totalStock}
-                            </Text>
-                            <Text style={[styles.colMoney, styles.footLabel, { color: colors.text }]}>—</Text>
-                            <Text style={[styles.colMoney, styles.footValue, { color: colors.text }]}>
+                            <Text style={[styles.colMoney, styles.footValue, { color: colors.text }]} numberOfLines={1}>
                               ${totalProductRevenue.toFixed(2)}
                             </Text>
-                            <Text style={[styles.colMoney, styles.footValue, { color: PROFIT_GREEN }]}>
+                            <Text style={[styles.colMoney, styles.footValue, { color: PROFIT_GREEN }]} numberOfLines={1}>
                               ${totalProfit.toFixed(2)}
                             </Text>
                           </View>
                         ) : null}
                       </View>
-                    </ScrollView>
+                    </View>
                   )}
                 </View>
               </View>
@@ -639,17 +710,15 @@ export default function ReportsScreen() {
               </Text>
             }
             renderItem={({ item }) => (
-              <Pressable
-                onPress={() => openSale(item)}
-                style={({ pressed }) => [
+              <View
+                style={[
                   styles.row,
                   {
                     backgroundColor: colors.surface,
                     borderColor: colors.border,
-                    opacity: pressed ? 0.92 : 1,
                   },
                 ]}>
-                <View style={styles.rowLeft}>
+                <Pressable onPress={() => openSale(item)} style={styles.rowLeft}>
                   <Text style={[styles.inv, { color: colors.primary }]}>
                     INV-{String(item.id).padStart(6, '0')}
                   </Text>
@@ -659,9 +728,28 @@ export default function ReportsScreen() {
                   <Text style={[styles.when, { color: colors.textMuted }]}>
                     Profit: ${Number(item.estimated_profit || 0).toFixed(2)}
                   </Text>
+                </Pressable>
+                <View style={{ alignItems: 'flex-end', gap: 8 }}>
+                  <Text style={[styles.tot, { color: colors.text }]}>${Number(item.total).toFixed(2)}</Text>
+                  <Pressable
+                    onPress={() => openReversalModal(item)}
+                    disabled={reversalBusySaleId === item.id}
+                    style={[
+                      styles.productViewBtn,
+                      {
+                        minHeight: 32,
+                        paddingHorizontal: 10,
+                        backgroundColor: colors.inputBg,
+                        borderColor: colors.border,
+                        opacity: reversalBusySaleId === item.id ? 0.6 : 1,
+                      },
+                    ]}>
+                    <Text style={[styles.productViewBtnText, { color: colors.text }]}>
+                      {reversalBusySaleId === item.id ? 'Working…' : 'Reverse items'}
+                    </Text>
+                  </Pressable>
                 </View>
-                <Text style={[styles.tot, { color: colors.text }]}>${Number(item.total).toFixed(2)}</Text>
-              </Pressable>
+              </View>
             )}
           />
         ) : (
@@ -837,6 +925,90 @@ export default function ReportsScreen() {
           </ScrollView>
         )
       ) : null}
+
+      <Modal
+        visible={!!reversalModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setReversalModal(null)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.reversalModalOverlay}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setReversalModal(null)} />
+          <View
+            style={[
+              styles.reversalSheet,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+                paddingBottom: Math.max(16, insets.bottom + 12),
+              },
+            ]}>
+            <Text style={[styles.reversalTitle, { color: colors.text }]}>
+              Reverse items
+              {reversalModal ? ` · INV-${String(reversalModal.sale.id).padStart(6, '0')}` : ''}
+            </Text>
+            <Text style={[styles.reversalHint, { color: colors.textMuted }]}>
+              Enter how many units to return to stock per line (max = units still counted as sold).
+            </Text>
+            <FlatList
+              data={reversalModal?.lines || []}
+              keyExtractor={(l) => String(l.saleItemId)}
+              style={styles.reversalList}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item: line }) => (
+                <View style={[styles.reversalLineCard, { borderColor: colors.border, backgroundColor: colors.inputBg }]}>
+                  <Text style={[styles.reversalLineName, { color: colors.text }]} numberOfLines={2}>
+                    {line.name}
+                  </Text>
+                  <Text style={[styles.reversalLineMeta, { color: colors.textMuted }]}>
+                    Max to reverse: {Number(line.netQuantity || 0)}
+                  </Text>
+                  <TextInput
+                    value={String(line.draftQty ?? '')}
+                    onChangeText={(t) => updateReversalDraft(line.saleItemId, t)}
+                    keyboardType="number-pad"
+                    placeholder="0"
+                    placeholderTextColor={colors.textMuted}
+                    style={[
+                      styles.reversalQtyInput,
+                      { borderColor: colors.border, backgroundColor: colors.surface, color: colors.text },
+                    ]}
+                  />
+                </View>
+              )}
+            />
+            <Text style={[styles.reversalReasonLabel, { color: colors.textMuted }]}>Reason (optional)</Text>
+            <TextInput
+              value={reversalReason}
+              onChangeText={setReversalReason}
+              placeholder="e.g. customer return"
+              placeholderTextColor={colors.textMuted}
+              style={[
+                styles.reversalReasonInput,
+                { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text },
+              ]}
+            />
+            <View style={styles.reversalActions}>
+              <Pressable
+                onPress={() => setReversalModal(null)}
+                style={[styles.reversalGhostBtn, { borderColor: colors.border }]}>
+                <Text style={[styles.reversalGhostBtnText, { color: colors.text }]}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={submitReversalFromModal}
+                disabled={reversalBusySaleId !== null}
+                style={[
+                  styles.reversalPrimaryBtn,
+                  { backgroundColor: colors.primary },
+                  reversalBusySaleId !== null && { opacity: 0.6 },
+                ]}>
+                <Text style={[styles.reversalPrimaryBtnText, { color: colors.onPrimary }]}>Apply reversal</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <ReceiptModal
         visible={histVisible}
@@ -1148,6 +1320,11 @@ function makeStyles(colors) {
     },
     productTableWrap: {
       marginTop: 8,
+      width: '100%',
+      alignSelf: 'stretch',
+    },
+    productTableInner: {
+      width: '100%',
     },
     productHeadRow: {
       paddingTop: 0,
@@ -1157,8 +1334,8 @@ function makeStyles(colors) {
       alignItems: 'center',
       borderBottomWidth: 1,
       paddingVertical: 8,
-      minWidth: 736,
-      gap: 8,
+      width: '100%',
+      gap: 4,
     },
     productFootRow: {
       borderBottomWidth: 0,
@@ -1167,25 +1344,37 @@ function makeStyles(colors) {
       paddingTop: 10,
     },
     colHead: {
-      fontSize: 11,
+      fontSize: 10,
       fontWeight: '800',
     },
     colName: {
-      width: 170,
-      fontSize: 13,
+      flex: 2.1,
+      minWidth: 0,
+      fontSize: 12,
       fontWeight: '700',
+      paddingRight: 2,
     },
     colMini: {
-      width: 58,
-      fontSize: 13,
+      flex: 0.55,
+      flexGrow: 0,
+      flexBasis: 34,
+      maxWidth: 44,
+      fontSize: 12,
       fontWeight: '700',
       textAlign: 'right',
     },
     colMoney: {
-      width: 98,
-      fontSize: 13,
+      flex: 1,
+      minWidth: 0,
+      fontSize: 11,
       fontWeight: '800',
       textAlign: 'right',
+    },
+    tableEmptyMessage: {
+      flex: 1,
+      minWidth: 0,
+      fontSize: 13,
+      fontWeight: '600',
     },
     footLabel: {
       fontSize: 12,
@@ -1298,6 +1487,94 @@ function makeStyles(colors) {
     },
     tot: {
       fontSize: 18,
+      fontWeight: '900',
+    },
+    reversalModalOverlay: {
+      flex: 1,
+      justifyContent: 'flex-end',
+      backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    reversalSheet: {
+      borderTopLeftRadius: 16,
+      borderTopRightRadius: 16,
+      borderWidth: 1,
+      paddingHorizontal: 16,
+      paddingTop: 16,
+      maxHeight: '88%',
+    },
+    reversalTitle: {
+      fontSize: 18,
+      fontWeight: '900',
+      marginBottom: 6,
+    },
+    reversalHint: {
+      fontSize: 13,
+      lineHeight: 18,
+      marginBottom: 12,
+    },
+    reversalList: {
+      maxHeight: 280,
+      marginBottom: 8,
+    },
+    reversalLineCard: {
+      borderWidth: 1,
+      borderRadius: 10,
+      padding: 10,
+      marginBottom: 8,
+    },
+    reversalLineName: {
+      fontSize: 15,
+      fontWeight: '800',
+    },
+    reversalLineMeta: {
+      fontSize: 12,
+      marginTop: 4,
+    },
+    reversalQtyInput: {
+      marginTop: 8,
+      borderWidth: 1,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 10,
+      fontSize: 16,
+    },
+    reversalReasonLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      marginTop: 4,
+    },
+    reversalReasonInput: {
+      marginTop: 6,
+      borderWidth: 1,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 10,
+      fontSize: 15,
+    },
+    reversalActions: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 14,
+    },
+    reversalGhostBtn: {
+      flex: 1,
+      borderWidth: 1,
+      borderRadius: 10,
+      paddingVertical: 14,
+      alignItems: 'center',
+    },
+    reversalGhostBtnText: {
+      fontSize: 15,
+      fontWeight: '800',
+    },
+    reversalPrimaryBtn: {
+      flex: 1,
+      borderRadius: 10,
+      paddingVertical: 14,
+      alignItems: 'center',
+    },
+    reversalPrimaryBtnText: {
+      fontSize: 15,
       fontWeight: '900',
     },
   });

@@ -80,7 +80,7 @@ export default function SignInScreen() {
   return (
     <LinearGradient colors={[colors.background, colors.surface, colors.inputBg]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.gradient}>
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.flex}>
           <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
             <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <View style={styles.brandWrap}>
@@ -135,8 +135,9 @@ export default function SignInScreen() {
       </SafeAreaView>
 
       <Modal visible={forgotOpen} transparent animationType="fade" onRequestClose={() => setForgotOpen(false)}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <Pressable style={styles.modalBackdrop} onPress={() => setForgotOpen(false)} />
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalScroll}>
           <View style={[styles.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>Forgot password</Text>
             <TextInput
@@ -157,12 +158,14 @@ export default function SignInScreen() {
               <Text style={[styles.btnText, { color: colors.onPrimary }]}>{recoveryBusy ? 'Verifying...' : 'Verify owner'}</Text>
             </Pressable>
           </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={resetOpen} transparent animationType="fade" onRequestClose={() => setResetOpen(false)}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <Pressable style={styles.modalBackdrop} onPress={() => setResetOpen(false)} />
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalScroll}>
           <View style={[styles.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>Reset password</Text>
             <View style={styles.passRow}>
@@ -195,7 +198,8 @@ export default function SignInScreen() {
               <Text style={[styles.btnText, { color: colors.onPrimary }]}>{recoveryBusy ? 'Resetting...' : 'Reset password'}</Text>
             </Pressable>
           </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
     </LinearGradient>
   );
@@ -247,6 +251,7 @@ function makeStyles() {
     btnText: { fontSize: 17, fontWeight: '800' },
     footer: { marginTop: 10, fontSize: 14 },
     modalOverlay: { flex: 1, justifyContent: 'center', padding: 18 },
+    modalScroll: { flexGrow: 1, justifyContent: 'center' },
     modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.3)' },
     modalCard: { borderWidth: 1, borderRadius: 14, padding: 14, gap: 8 },
     modalTitle: { fontSize: 18, fontWeight: '900', marginBottom: 4 },

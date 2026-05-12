@@ -251,6 +251,99 @@ export function CapitalModal({ visible, onClose, colors, onSave, busy }) {
   );
 }
 
+export function CapitalAdjustmentModal({ visible, onClose, colors, onSave, busy }) {
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [dateStr, setDateStr] = useState(todayYmd());
+  const [notes, setNotes] = useState('');
+  const [mode, setMode] = useState('add');
+
+  useEffect(() => {
+    if (visible) {
+      setAmount('');
+      setReason('');
+      setDateStr(todayYmd());
+      setNotes('');
+      setMode('add');
+    }
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={styles.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <Pressable style={styles.backdrop} onPress={onClose} />
+        <View style={[styles.sheet, { backgroundColor: colors.surface }]}>
+          <View style={styles.sheetHead}>
+            <Text style={[styles.sheetTitle, { color: colors.text }]}>Adjust available capital</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Ionicons name="close" size={24} color={colors.textMuted} />
+            </Pressable>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.form}>
+            <FieldLabel colors={colors}>Action *</FieldLabel>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable
+                onPress={() => setMode('add')}
+                style={[
+                  styles.primaryBtn,
+                  { flex: 1, minHeight: 42, marginTop: 0, backgroundColor: mode === 'add' ? colors.primary : colors.inputBg },
+                ]}>
+                <Text style={[styles.primaryBtnText, { color: mode === 'add' ? colors.onPrimary : colors.text }]}>Add</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setMode('subtract')}
+                style={[
+                  styles.primaryBtn,
+                  { flex: 1, minHeight: 42, marginTop: 0, backgroundColor: mode === 'subtract' ? colors.primary : colors.inputBg },
+                ]}>
+                <Text style={[styles.primaryBtnText, { color: mode === 'subtract' ? colors.onPrimary : colors.text }]}>Subtract</Text>
+              </Pressable>
+            </View>
+            <FieldLabel colors={colors}>Amount *</FieldLabel>
+            <TextInput
+              value={amount}
+              onChangeText={setAmount}
+              placeholder="0.00"
+              placeholderTextColor={colors.textMuted}
+              keyboardType="decimal-pad"
+              style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+            />
+            <FieldLabel colors={colors}>Reason *</FieldLabel>
+            <TextInput
+              value={reason}
+              onChangeText={setReason}
+              placeholder="Why this adjustment?"
+              placeholderTextColor={colors.textMuted}
+              style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+            />
+            <FieldLabel colors={colors}>Date (YYYY-MM-DD) *</FieldLabel>
+            <TextInput
+              value={dateStr}
+              onChangeText={setDateStr}
+              placeholder="2026-04-25"
+              placeholderTextColor={colors.textMuted}
+              style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+            />
+            <FieldLabel colors={colors}>Note (optional)</FieldLabel>
+            <TextInput
+              value={notes}
+              onChangeText={setNotes}
+              multiline
+              style={[styles.input, styles.tallInput, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+            />
+            <Pressable
+              onPress={() => onSave({ amount, mode, reason, occurredOn: dateStr, notes })}
+              disabled={busy}
+              style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: busy ? 0.6 : 1 }]}>
+              <Text style={[styles.primaryBtnText, { color: colors.onPrimary }]}>Save adjustment</Text>
+            </Pressable>
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 export function BreakageModal({ visible, onClose, colors, onSave, busy, products }) {
   const [productId, setProductId] = useState(null);
   const [quantity, setQuantity] = useState('1');

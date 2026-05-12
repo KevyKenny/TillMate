@@ -13,6 +13,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  ToastAndroid,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -36,6 +37,10 @@ function marginLine(item) {
   return `Cost $${c.toFixed(2)} · Margin/unit $${per.toFixed(2)}`;
 }
 
+function roundMoney(n) {
+  return Math.round(Number(n || 0) * 100) / 100;
+}
+
 export default function InventoryScreen() {
   const { height: windowHeight } = useWindowDimensions();
   const { colors } = useAppTheme();
@@ -51,7 +56,9 @@ export default function InventoryScreen() {
   const [editStock, setEditStock] = useState('');
   const [editCost, setEditCost] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [stockTab, setStockTab] = useState('overview');
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editReason, setEditReason] = useState('');
   const styles = useMemo(() => makeStyles(), []);
 
   const loadItems = useCallback(async () => {
@@ -93,10 +100,46 @@ export default function InventoryScreen() {
     setEditCost(
       item.cost_price === null || item.cost_price === undefined ? '' : String(item.cost_price)
     );
+    setEditReason('');
   };
 
   const closeEdit = () => {
     setEditProduct(null);
+  };
+
+  const runSave = async () => {
+    if (!editProduct) return;
+    const p = parseFloat(editPrice);
+    const s = parseInt(editStock, 10);
+    setSavingEdit(true);
+    try {
+      await productService.updateProduct({
+        userId: user?.id,
+        id: editProduct.id,
+        name: editName.trim(),
+        price: p,
+        stock: s,
+        category: editCategory.trim() || 'General',
+        costPrice: parseFloat(String(editCost).trim().replace(',', '.')),
+        reason: editReason,
+      });
+      closeEdit();
+      await loadItems();
+      await notifyDataChanged();
+      Alert.alert('Saved', 'Product updated.');
+    } catch (e) {
+      const msg = String(e?.message || '');
+      if (
+        Platform.OS === 'android' &&
+        (msg.startsWith('Insufficient capital') || msg.startsWith('Reason is required'))
+      ) {
+        ToastAndroid.show(msg, ToastAndroid.LONG);
+      } else {
+        Alert.alert('Error', e?.message ?? 'Could not save.');
+      }
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const saveEdit = async () => {
@@ -122,26 +165,27 @@ export default function InventoryScreen() {
       Alert.alert('Invalid cost', 'Cost is required and must be a valid amount.');
       return;
     }
-    setSavingEdit(true);
-    try {
-      await productService.updateProduct({
-        userId: user?.id,
-        id: editProduct.id,
-        name: editName.trim(),
-        price: p,
-        stock: s,
-        category: editCategory.trim() || 'General',
-        costPrice: costVal,
-      });
-      closeEdit();
-      await loadItems();
-      await notifyDataChanged();
-      Alert.alert('Saved', 'Product updated.');
-    } catch (e) {
-      Alert.alert('Error', e?.message ?? 'Could not save.');
-    } finally {
-      setSavingEdit(false);
+    const prevStock = Math.max(0, Math.floor(Number(editProduct.stock || 0)));
+    const prevCost =
+      editProduct.cost_price == null || Number.isNaN(Number(editProduct.cost_price))
+        ? 0
+        : Number(editProduct.cost_price);
+    const oldTotal = roundMoney(prevStock * prevCost);
+    const newTotal = roundMoney(s * costVal);
+    const valueDiff = roundMoney(newTotal - oldTotal);
+    const costChanged = Math.abs(prevCost - costVal) > 1e-9;
+    const needsReason =
+      s !== prevStock ||
+      costChanged ||
+      Math.abs(valueDiff) > 1e-9;
+    if (needsReason && !editReason.trim()) {
+      Alert.alert(
+        'Reason required',
+        'Enter a short note whenever stock quantity, cost price, or total inventory value changes. This is stored on the finance ledger.'
+      );
+      return;
     }
+    await runSave();
   };
 
   const confirmRemove = (product) => {
@@ -204,11 +248,32 @@ export default function InventoryScreen() {
     });
   }, [items, searchQuery]);
 
+  const tableRows = useMemo(
+    () =>
+      [...filteredItems].sort((a, b) =>
+        String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' })
+      ),
+    [filteredItems]
+  );
+
+  const tableTotals = useMemo(() => {
+    let units = 0;
+    let costSum = 0;
+    for (const row of tableRows) {
+      const c = Math.max(0, Math.floor(Number(row.stock || 0)));
+      const unitCost =
+        row.cost_price == null || Number.isNaN(Number(row.cost_price)) ? 0 : Number(row.cost_price);
+      units += c;
+      costSum += c * unitCost;
+    }
+    return { units, cost: roundMoney(costSum) };
+  }, [tableRows]);
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
       <ScreenHeader
         title="Stock"
-        subtitle="Adjust your stock from here."
+        subtitle={stockTab === 'overview' ? 'Book value by product, or switch to Manage to edit.' : 'Search, edit, remove, or restore products.'}
         rightSlot={
           <Pressable
             onPress={onRefresh}
@@ -220,25 +285,64 @@ export default function InventoryScreen() {
         }
       />
 
-      <View style={[styles.toggleRow, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
-        <Text style={[styles.toggleLabel, { color: colors.text }]}>Show removed products</Text>
-        <Pressable
-          onPress={() => setShowRemoved((v) => !v)}
-          style={[
-            styles.toggleChip,
-            { borderColor: colors.border, backgroundColor: showRemoved ? colors.primary : colors.inputBg },
-          ]}>
-          <Text style={{ fontWeight: '800', color: showRemoved ? colors.onPrimary : colors.text }}>
-            {showRemoved ? 'On' : 'Off'}
+      <View style={[styles.stockTopRow, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+        <View style={styles.tabGroup}>
+          <Pressable
+            onPress={() => setStockTab('overview')}
+            style={[
+              styles.stockTab,
+              stockTab === 'overview' && { backgroundColor: colors.primary },
+              { borderColor: colors.border },
+            ]}>
+            <Text
+              style={[
+                styles.stockTabText,
+                { color: stockTab === 'overview' ? colors.onPrimary : colors.text },
+              ]}>
+              Overview
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setStockTab('manage')}
+            style={[
+              styles.stockTab,
+              stockTab === 'manage' && { backgroundColor: colors.primary },
+              { borderColor: colors.border },
+            ]}>
+            <Text
+              style={[
+                styles.stockTabText,
+                { color: stockTab === 'manage' ? colors.onPrimary : colors.text },
+              ]}>
+              Manage
+            </Text>
+          </Pressable>
+        </View>
+        <View style={styles.removedInline}>
+          <Text
+            style={[styles.toggleLabelInline, { color: colors.text }]}
+            numberOfLines={2}
+            accessibilityLabel="Show removed products">
+            Show removed products
           </Text>
-        </Pressable>
+          <Pressable
+            onPress={() => setShowRemoved((v) => !v)}
+            style={[
+              styles.toggleChip,
+              { borderColor: colors.border, backgroundColor: showRemoved ? colors.primary : colors.inputBg },
+            ]}>
+            <Text style={{ fontWeight: '800', color: showRemoved ? colors.onPrimary : colors.text }}>
+              {showRemoved ? 'On' : 'Off'}
+            </Text>
+          </Pressable>
+        </View>
       </View>
       <View style={[styles.searchWrap, { borderColor: colors.border, backgroundColor: colors.inputBg }]}>
         <Ionicons name="search-outline" size={18} color={colors.textMuted} />
         <TextInput
           value={searchQuery}
           onChangeText={setSearchQuery}
-          placeholder="Search name or category"
+          placeholder={stockTab === 'overview' ? 'Filter table by name or category' : 'Search name or category'}
           placeholderTextColor={colors.textMuted}
           style={[styles.searchInput, { color: colors.text }]}
         />
@@ -249,23 +353,106 @@ export default function InventoryScreen() {
         ) : null}
       </View>
 
-      <FlatList
-        data={filteredItems}
-        keyExtractor={(item) => String(item.id)}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.primary}
+      {stockTab === 'overview' ? (
+        <View
+          style={[
+            styles.stockTableCard,
+            { borderColor: colors.border, backgroundColor: colors.surface },
+          ]}>
+          <FlatList
+            data={tableRows}
+            keyExtractor={(item) => String(item.id)}
+            style={styles.tabListFlex}
+            contentContainerStyle={styles.stockTableListContent}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+            }
+            ListHeaderComponent={
+              <View style={[styles.stockTableRow, styles.stockTableHeadRow, { borderBottomColor: colors.border }]}>
+                <Text style={[styles.stockColProduct, styles.stockColHead, { color: colors.textMuted }]}>Product</Text>
+                <Text style={[styles.stockColCount, styles.stockColHead, { color: colors.textMuted }]} numberOfLines={1}>
+                  Count
+                </Text>
+                <Text style={[styles.stockColMoney, styles.stockColHead, { color: colors.textMuted }]}>Total Cost</Text>
+              </View>
+            }
+            ListEmptyComponent={
+              <View style={[styles.stockTableRow, { borderBottomColor: colors.border }]}>
+                <Text style={[styles.stockColProduct, styles.stockTableEmpty, { color: colors.textMuted }]}>
+                  {!ready ? 'Loading…' : 'No products in this view.'}
+                </Text>
+              </View>
+            }
+            ListFooterComponent={
+              tableRows.length > 0 ? (
+                <View style={[styles.stockTableRow, styles.stockTableFootRow, { borderTopColor: colors.border }]}>
+                  <Text style={[styles.stockColProduct, styles.stockFootLabel, { color: colors.text }]} numberOfLines={1}>
+                    Totals
+                  </Text>
+                  <Text style={[styles.stockColCount, styles.stockFootValue, { color: colors.text }]}>
+                    {tableTotals.units}
+                  </Text>
+                  <Text style={[styles.stockColMoney, styles.stockFootValue, { color: colors.primary }]} numberOfLines={1}>
+                    ${tableTotals.cost.toFixed(2)}
+                  </Text>
+                </View>
+              ) : null
+            }
+            renderItem={({ item }) => {
+              const removed = !!item.deleted_at;
+              const count = Math.max(0, Math.floor(Number(item.stock || 0)));
+              const unitCost =
+                item.cost_price == null || Number.isNaN(Number(item.cost_price)) ? 0 : Number(item.cost_price);
+              const lineTotal = roundMoney(count * unitCost);
+              return (
+                <View
+                  style={[
+                    styles.stockTableRow,
+                    { borderBottomColor: colors.border },
+                    removed && { opacity: 0.65 },
+                  ]}>
+                  <Text
+                    style={[styles.stockColProduct, styles.stockCellText, { color: colors.text }, removed && styles.strike]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail">
+                    {item.name}
+                    {removed ? ' (removed)' : ''}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.stockColCount,
+                      styles.stockCellText,
+                      { color: count <= 5 ? colors.danger ?? '#b42318' : colors.text },
+                    ]}>
+                    {count}
+                  </Text>
+                  <Text style={[styles.stockColMoney, styles.stockCellText, { color: colors.text }]} numberOfLines={1}>
+                    ${lineTotal.toFixed(2)}
+                  </Text>
+                </View>
+              );
+            }}
           />
-        }
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <Text style={[styles.empty, { color: colors.textMuted }]}>
-            {!ready ? 'Loading…' : searchQuery ? 'No matching products.' : 'No products in this view.'}
-          </Text>
-        }
-        renderItem={({ item }) => {
+        </View>
+      ) : (
+        <FlatList
+          data={filteredItems}
+          keyExtractor={(item) => String(item.id)}
+          style={styles.tabListFlex}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+            />
+          }
+          contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            <Text style={[styles.empty, { color: colors.textMuted }]}>
+              {!ready ? 'Loading…' : searchQuery ? 'No matching products.' : 'No products in this view.'}
+            </Text>
+          }
+          renderItem={({ item }) => {
           const removed = !!item.deleted_at;
           const margin = marginLine(item);
           const dateOpts = { dateStyle: 'short', timeStyle: 'short' };
@@ -352,12 +539,13 @@ export default function InventoryScreen() {
           );
         }}
       />
+      )}
 
       <Modal visible={!!editProduct} transparent animationType="fade" onRequestClose={closeEdit}>
         <View style={styles.modalBackdrop}>
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeEdit} accessibilityLabel="Close" />
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.modalKb}>
             <Pressable onPress={(e) => e.stopPropagation()}>
               <View
@@ -409,6 +597,16 @@ export default function InventoryScreen() {
                 placeholderTextColor={colors.textMuted}
                 style={[styles.modalInput, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
               />
+              <Text style={[styles.modalLabel, { color: colors.text }]}>
+                Reason (required when quantity, cost, or inventory value changes)
+              </Text>
+              <TextInput
+                value={editReason}
+                onChangeText={setEditReason}
+                placeholder="e.g. damaged stock, count correction"
+                placeholderTextColor={colors.textMuted}
+                style={[styles.modalInput, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+              />
             </ScrollView>
             <View style={styles.modalActions}>
               <Pressable onPress={closeEdit} style={[styles.modalGhost, { borderColor: colors.border }]}>
@@ -435,21 +633,121 @@ export default function InventoryScreen() {
 function makeStyles() {
   return StyleSheet.create({
     safe: { flex: 1 },
-    toggleRow: {
+    stockTopRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 16,
-      paddingVertical: 12,
+      gap: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
       borderBottomWidth: 1,
     },
-    toggleLabel: {
-      fontSize: 16,
+    tabGroup: {
+      flex: 1,
+      flexDirection: 'row',
+      gap: 8,
+      minWidth: 0,
+    },
+    removedInline: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      flexShrink: 1,
+      minWidth: 0,
+      marginLeft: 4,
+    },
+    toggleLabelInline: {
+      fontSize: 11,
+      fontWeight: '700',
+      flexShrink: 1,
+      textAlign: 'right',
+      minWidth: 0,
+      maxWidth: 118,
+    },
+    stockTab: {
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: 12,
+      borderWidth: 1,
+      alignItems: 'center',
+    },
+    stockTabText: { fontSize: 14, fontWeight: '800' },
+    tabListFlex: { flex: 1 },
+    stockTableCard: {
+      flex: 1,
+      marginHorizontal: 16,
+      marginTop: 8,
+      borderRadius: 12,
+      borderWidth: 1,
+      overflow: 'hidden',
+      minHeight: 100,
+    },
+    stockTableListContent: {
+      flexGrow: 1,
+      paddingBottom: 24,
+    },
+    stockTableRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      width: '100%',
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      gap: 4,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+    },
+    stockTableHeadRow: {
+      paddingTop: 4,
+      borderBottomWidth: 1,
+    },
+    stockTableFootRow: {
+      borderBottomWidth: 0,
+      borderTopWidth: 1,
+      paddingTop: 10,
+      paddingBottom: 10,
+      marginTop: 0,
+    },
+    stockColProduct: {
+      flex: 2.1,
+      minWidth: 0,
+      paddingRight: 2,
+    },
+    stockColCount: {
+      flexGrow: 0,
+      flexShrink: 0,
+      width: 54,
+      minWidth: 54,
+      textAlign: 'center',
+    },
+    stockColMoney: {
+      flex: 1,
+      minWidth: 0,
+      textAlign: 'right',
+    },
+    stockColHead: {
+      fontSize: 10,
+      fontWeight: '800',
+    },
+    stockCellText: {
+      fontSize: 12,
       fontWeight: '700',
     },
+    stockTableEmpty: {
+      flex: 1,
+      minWidth: 0,
+      fontSize: 12,
+      fontWeight: '600',
+      paddingVertical: 6,
+    },
+    stockFootLabel: {
+      fontSize: 12,
+      fontWeight: '800',
+    },
+    stockFootValue: {
+      fontSize: 13,
+      fontWeight: '900',
+    },
     toggleChip: {
-      paddingHorizontal: 16,
-      paddingVertical: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
       borderRadius: 12,
       borderWidth: 1,
     },

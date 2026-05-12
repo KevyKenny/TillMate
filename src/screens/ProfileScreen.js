@@ -1,12 +1,12 @@
-import React, { useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import React, { useMemo, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import ScreenHeader from '../components/ScreenHeader';
 import ThermalPrinterSection from '../components/ThermalPrinterSection';
-import { useAuth } from '../context/AuthContext';
 import { useAppTheme } from '../context/AppThemeContext';
+import { useAuth } from '../context/AuthContext';
 
 function TabButton({ label, active, onPress, colors, ui }) {
   return (
@@ -117,7 +117,7 @@ export default function ProfileScreen() {
         <View style={stylesMemo.tabsRow}>
           <TabButton label="Profile" active={rootTab === 'profile'} onPress={() => setRootTab('profile')} colors={colors} ui={stylesMemo} />
           <TabButton label="Edit profile" active={rootTab === 'change'} onPress={() => setRootTab('change')} colors={colors} ui={stylesMemo} />
-          <TabButton label="Printer" active={rootTab === 'printer'} onPress={() => setRootTab('printer')} colors={colors} ui={stylesMemo} />
+          {/* <TabButton label="Printer" active={rootTab === 'printer'} onPress={() => setRootTab('printer')} colors={colors} ui={stylesMemo} /> */}
         </View>
 
         {rootTab === 'profile' ? (

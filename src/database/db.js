@@ -123,7 +123,7 @@ async function migrate(db) {
       CREATE TABLE finance_transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         owner_user_id INTEGER NOT NULL,
-        type TEXT NOT NULL CHECK (type IN ('expense','withdrawal','breakage','capital','profit','stock_purchase','stock_adjustment')),
+        type TEXT NOT NULL CHECK (type IN ('expense','withdrawal','breakage','capital','profit','stock_purchase','stock_adjustment','capital_adjustment','stock_reversal','sale_reversal','profit_reversal')),
         amount REAL NOT NULL CHECK (amount >= 0),
         occurred_on TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
@@ -134,15 +134,54 @@ async function migrate(db) {
         withdrawn_by TEXT,
         capital_source TEXT,
         sale_id INTEGER,
+        hidden_at TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       INSERT INTO finance_transactions (
         id, owner_user_id, type, amount, occurred_on, description, notes,
-        product_id, product_name, quantity, withdrawn_by, capital_source, sale_id, created_at
+        product_id, product_name, quantity, withdrawn_by, capital_source, sale_id, hidden_at, created_at
       )
       SELECT
         id, owner_user_id, type, amount, occurred_on, description, notes,
-        product_id, product_name, quantity, withdrawn_by, capital_source, sale_id, created_at
+        product_id, product_name, quantity, withdrawn_by, capital_source, sale_id, NULL, created_at
+      FROM finance_transactions_old;
+      DROP TABLE finance_transactions_old;
+      CREATE INDEX IF NOT EXISTS idx_finance_owner_date ON finance_transactions (owner_user_id, occurred_on);
+      CREATE INDEX IF NOT EXISTS idx_finance_owner_type ON finance_transactions (owner_user_id, type);
+    `);
+  }
+
+  const financeTable2 = await db.getFirstAsync(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'finance_transactions';`
+  );
+  const financeSql2 = String(financeTable2?.sql || '');
+  if (financeSql2 && !financeSql2.includes("'profit_reversal'")) {
+    await db.execAsync(`
+      ALTER TABLE finance_transactions RENAME TO finance_transactions_old;
+      CREATE TABLE finance_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_user_id INTEGER NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('expense','withdrawal','breakage','capital','profit','stock_purchase','stock_adjustment','capital_adjustment','stock_reversal','sale_reversal','profit_reversal')),
+        amount REAL NOT NULL CHECK (amount >= 0),
+        occurred_on TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        notes TEXT,
+        product_id INTEGER,
+        product_name TEXT,
+        quantity INTEGER,
+        withdrawn_by TEXT,
+        capital_source TEXT,
+        sale_id INTEGER,
+        hidden_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO finance_transactions (
+        id, owner_user_id, type, amount, occurred_on, description, notes,
+        product_id, product_name, quantity, withdrawn_by, capital_source, sale_id, hidden_at, created_at
+      )
+      SELECT
+        id, owner_user_id, type, amount, occurred_on, description, notes,
+        product_id, product_name, quantity, withdrawn_by, capital_source, sale_id, hidden_at, created_at
       FROM finance_transactions_old;
       DROP TABLE finance_transactions_old;
       CREATE INDEX IF NOT EXISTS idx_finance_owner_date ON finance_transactions (owner_user_id, occurred_on);
@@ -222,7 +261,7 @@ async function runSchemaSetup(db) {
     CREATE TABLE IF NOT EXISTS finance_transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       owner_user_id INTEGER NOT NULL,
-      type TEXT NOT NULL CHECK (type IN ('expense','withdrawal','breakage','capital','profit','stock_purchase','stock_adjustment')),
+      type TEXT NOT NULL CHECK (type IN ('expense','withdrawal','breakage','capital','profit','stock_purchase','stock_adjustment','capital_adjustment','stock_reversal','sale_reversal','profit_reversal')),
       amount REAL NOT NULL CHECK (amount >= 0),
       occurred_on TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
@@ -233,6 +272,7 @@ async function runSchemaSetup(db) {
       withdrawn_by TEXT,
       capital_source TEXT,
       sale_id INTEGER,
+      hidden_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
@@ -242,6 +282,18 @@ async function runSchemaSetup(db) {
   await db.execAsync(
     `CREATE INDEX IF NOT EXISTS idx_finance_owner_type ON finance_transactions (owner_user_id, type);`
   );
+  const financeCols = await columnNames(db, 'finance_transactions');
+  if (!financeCols.has('hidden_at')) {
+    await db.execAsync(`ALTER TABLE finance_transactions ADD COLUMN hidden_at TEXT;`);
+  }
+  const salesCols = await columnNames(db, 'sales');
+  if (!salesCols.has('reversed_total')) {
+    await db.execAsync(`ALTER TABLE sales ADD COLUMN reversed_total REAL NOT NULL DEFAULT 0;`);
+  }
+  const saleItemsCols = await columnNames(db, 'sale_items');
+  if (!saleItemsCols.has('reversed_quantity')) {
+    await db.execAsync(`ALTER TABLE sale_items ADD COLUMN reversed_quantity INTEGER NOT NULL DEFAULT 0;`);
+  }
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS stock_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

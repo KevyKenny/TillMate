@@ -17,17 +17,30 @@ export async function getSalesInDateRange(userId, startYmd, endYmd) {
        s.change_amount,
        s.payment_method,
        COALESCE(
-         SUM(CASE WHEN p.cost_price IS NOT NULL THEN si.quantity * (si.unit_price - p.cost_price) ELSE 0 END),
+        SUM(
+          CASE
+            WHEN p.cost_price IS NOT NULL
+              THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) * (si.unit_price - p.cost_price)
+            ELSE 0
+          END
+        ),
          0
        ) AS estimated_profit,
        COALESCE(
-         SUM(CASE WHEN p.cost_price IS NOT NULL THEN si.quantity * si.unit_price ELSE 0 END),
+        SUM(
+          CASE
+            WHEN p.cost_price IS NOT NULL
+              THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) * si.unit_price
+            ELSE 0
+          END
+        ),
          0
        ) AS tracked_revenue
      FROM sales s
      LEFT JOIN sale_items si ON si.sale_id = s.id
      LEFT JOIN products p ON p.id = si.product_id AND p.owner_user_id = s.owner_user_id
      WHERE s.owner_user_id = ?
+      AND s.total > 0
        AND s.sale_date IS NOT NULL
        AND s.sale_date >= ?
        AND s.sale_date <= ?
@@ -42,10 +55,14 @@ export async function getSaleLines(userId, saleId) {
   const db = await getDb();
   return db.getAllAsync(
     `SELECT
+       id AS saleItemId,
+       product_id AS productId,
        COALESCE(NULLIF(TRIM(product_name), ''), 'Item') AS name,
        quantity AS quantity,
+       COALESCE(reversed_quantity, 0) AS reversedQuantity,
+       (quantity - COALESCE(reversed_quantity, 0)) AS netQuantity,
        unit_price AS unitPrice,
-       (quantity * unit_price) AS lineTotal
+       ((quantity - COALESCE(reversed_quantity, 0)) * unit_price) AS lineTotal
      FROM sale_items
      WHERE sale_id IN (SELECT id FROM sales WHERE id = ? AND owner_user_id = ?)
      ORDER BY id ASC;`,
@@ -71,21 +88,40 @@ export async function getRangeSummary(userId, startYmd, endYmd) {
        COUNT(DISTINCT s.id) AS sales_count,
        COALESCE(SUM(s.total), 0) AS total_revenue,
        COALESCE(
-         SUM(CASE WHEN p.cost_price IS NOT NULL THEN si.quantity * si.unit_price ELSE 0 END),
+         SUM(
+           CASE
+             WHEN p.cost_price IS NOT NULL
+               THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) * si.unit_price
+             ELSE 0
+           END
+         ),
          0
        ) AS tracked_revenue,
        COALESCE(
-         SUM(CASE WHEN p.cost_price IS NOT NULL THEN si.quantity * p.cost_price ELSE 0 END),
+         SUM(
+           CASE
+             WHEN p.cost_price IS NOT NULL
+               THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) * p.cost_price
+             ELSE 0
+           END
+         ),
          0
        ) AS total_cost,
        COALESCE(
-         SUM(CASE WHEN p.cost_price IS NOT NULL THEN si.quantity * (si.unit_price - p.cost_price) ELSE 0 END),
+         SUM(
+           CASE
+             WHEN p.cost_price IS NOT NULL
+               THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) * (si.unit_price - p.cost_price)
+             ELSE 0
+           END
+         ),
          0
        ) AS total_profit
      FROM sales s
      LEFT JOIN sale_items si ON si.sale_id = s.id
      LEFT JOIN products p ON p.id = si.product_id AND p.owner_user_id = s.owner_user_id
      WHERE s.owner_user_id = ?
+      AND s.total > 0
        AND s.sale_date IS NOT NULL
        AND s.sale_date >= ?
        AND s.sale_date <= ?;`,
@@ -127,14 +163,30 @@ export async function getProductPerformance(userId, startYmd, endYmd) {
        p.stock AS remainingStock,
        p.cost_price AS costPrice,
        COALESCE(COUNT(DISTINCT CASE WHEN s.id IS NOT NULL THEN s.id END), 0) AS salesCount,
-       COALESCE(SUM(CASE WHEN s.id IS NOT NULL THEN si.quantity ELSE 0 END), 0) AS soldQty,
        COALESCE(
-         SUM(CASE WHEN s.id IS NOT NULL THEN si.quantity * si.unit_price ELSE 0 END), 0
+         SUM(CASE WHEN s.id IS NOT NULL THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) ELSE 0 END),
+         0
+       ) AS soldQty,
+       COALESCE(
+         SUM(
+           CASE
+             WHEN s.id IS NOT NULL
+               THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) * si.unit_price
+             ELSE 0
+           END
+         ),
+         0
        ) AS salesBalance,
        COALESCE(
          ROUND(
-           SUM(CASE WHEN s.id IS NOT NULL THEN si.quantity * si.unit_price ELSE 0 END)
-           / NULLIF(SUM(CASE WHEN s.id IS NOT NULL THEN si.quantity ELSE 0 END), 0),
+          SUM(
+            CASE
+              WHEN s.id IS NOT NULL
+                THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) * si.unit_price
+              ELSE 0
+            END
+          )
+           / NULLIF(SUM(CASE WHEN s.id IS NOT NULL THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) ELSE 0 END), 0),
            2
          ),
          0
@@ -142,7 +194,7 @@ export async function getProductPerformance(userId, startYmd, endYmd) {
        COALESCE(
          SUM(
            CASE WHEN p.cost_price IS NOT NULL AND s.id IS NOT NULL
-             THEN si.quantity * (si.unit_price - p.cost_price)
+            THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) * (si.unit_price - p.cost_price)
              ELSE 0
            END
          ),
@@ -153,12 +205,13 @@ export async function getProductPerformance(userId, startYmd, endYmd) {
      LEFT JOIN sales s
        ON s.id = si.sale_id
       AND s.owner_user_id = p.owner_user_id
+      AND s.total > 0
       AND s.sale_date IS NOT NULL
       AND s.sale_date >= ?
       AND s.sale_date <= ?
      WHERE p.owner_user_id = ?
      GROUP BY p.id
-     HAVING COALESCE(SUM(CASE WHEN s.id IS NOT NULL THEN si.quantity ELSE 0 END), 0) > 0
+    HAVING COALESCE(SUM(CASE WHEN s.id IS NOT NULL THEN (si.quantity - COALESCE(si.reversed_quantity, 0)) ELSE 0 END), 0) > 0
      ORDER BY salesBalance DESC, productName COLLATE NOCASE ASC;`,
     [startYmd, endYmd, userId]
   );
@@ -173,6 +226,7 @@ export async function getDailySalesSeries(userId, startYmd, endYmd) {
        COALESCE(SUM(s.total), 0) AS totalSales
      FROM sales s
      WHERE s.owner_user_id = ?
+      AND s.total > 0
        AND s.sale_date IS NOT NULL
        AND s.sale_date >= ?
        AND s.sale_date <= ?

@@ -1,19 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import CartPanel from '../components/CartPanel';
 import ProductGrid from '../components/ProductGrid';
 import ScreenHeader from '../components/ScreenHeader';
 import { useAppTheme } from '../context/AppThemeContext';
+import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
+import { getAllTimeSummary } from '../services/financeService';
 
 export default function SalesScreen() {
   const { colors } = useAppTheme();
+  const { user } = useAuth();
   const [listRefreshing, setListRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [capitalReady, setCapitalReady] = useState(true);
   const {
     ready,
     products,
@@ -26,7 +30,25 @@ export default function SalesScreen() {
     subtotal,
     beginCheckout,
     refreshProducts,
+    dataVersion,
   } = useCart();
+
+  const firstName = useMemo(() => {
+    const n = String(user?.fullName || '').trim();
+    if (!n) return '';
+    return n.split(/\s+/)[0];
+  }, [user?.fullName]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    getAllTimeSummary(user.id)
+      .then((s) =>
+        setCapitalReady(
+          Number(s.totalCapital || 0) > 0 || Number(s.totalCapitalAdjustments || 0) > 0
+        )
+      )
+      .catch(() => {});
+  }, [user?.id, dataVersion]);
 
   useFocusEffect(
     useCallback(() => {
@@ -69,6 +91,15 @@ export default function SalesScreen() {
         }
       />
       <View style={styles.container}>
+        {!capitalReady ? (
+          <View style={[styles.welcomeBanner, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+            <Text style={[styles.welcomeTitle, { color: colors.text }]}>
+              {firstName
+                ? `Welcome, ${firstName}! Please add your starting capital to begin using TillMate.`
+                : 'Welcome! Please add your starting capital to start purchasing orders!'}
+            </Text>
+          </View>
+        ) : null}
         <View style={[styles.searchWrap, { borderColor: colors.border, backgroundColor: colors.inputBg }]}>
           <Ionicons name="search-outline" size={18} color={colors.textMuted} />
           <TextInput
@@ -124,6 +155,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  welcomeBanner: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  welcomeTitle: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   searchInput: {
     flex: 1,

@@ -5,7 +5,9 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -14,9 +16,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { BreakageModal, CapitalModal, ExpenseModal, WithdrawalModal } from '../components/finance/FinanceEntryModals';
+import { BreakageModal, CapitalAdjustmentModal, CapitalModal, ExpenseModal, WithdrawalModal } from '../components/finance/FinanceEntryModals';
 import ScreenHeader from '../components/ScreenHeader';
 import { useAppTheme } from '../context/AppThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -41,9 +43,13 @@ function formatMoney(n) {
 }
 
 function formatLedgerAmount(type, amount) {
-  const x = Math.abs(Number(amount) || 0);
+  const raw = Number(amount) || 0;
+  const x = Math.abs(raw);
   const s = `$${x.toFixed(2)}`;
-  const isIn = type === 'profit' || type === 'capital';
+  if (['expense', 'withdrawal', 'breakage', 'stock_purchase', 'stock_adjustment', 'sale_reversal', 'profit_reversal'].includes(type)) {
+    return `−${s}`;
+  }
+  const isIn = type === 'profit' || type === 'capital' || type === 'stock_reversal' || type === 'capital_adjustment';
   return isIn ? `+${s}` : `−${s}`;
 }
 
@@ -60,6 +66,7 @@ export default function FinanceScreen() {
   const { user } = useAuth();
   const { notifyDataChanged, dataVersion } = useCart();
   const styles = useMemo(() => makeStyles(), []);
+  const insets = useSafeAreaInsets();
 
   const [summary, setSummary] = useState(null);
   const [ledger, setLedger] = useState([]);
@@ -75,6 +82,7 @@ export default function FinanceScreen() {
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [capitalOpen, setCapitalOpen] = useState(false);
+  const [capitalAdjustOpen, setCapitalAdjustOpen] = useState(false);
   const [breakageOpen, setBreakageOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -278,6 +286,33 @@ export default function FinanceScreen() {
     }
   };
 
+  const handleCapitalAdjustment = async (data) => {
+    if (!user?.id) return;
+    const a = parseYmd(data.occurredOn);
+    if (!a) return Alert.alert('Invalid date', 'Use YYYY-MM-DD.');
+    const value = parseFloat(String(data.amount).replace(',', '.'));
+    if (Number.isNaN(value) || value <= 0) return Alert.alert('Invalid amount', 'Enter a positive number.');
+    if (!String(data.reason || '').trim()) return Alert.alert('Required', 'Enter a reason.');
+    setSaving(true);
+    try {
+      await financeService.addCapitalAdjustment({
+        userId: user.id,
+        amount: value,
+        mode: data.mode,
+        reason: data.reason,
+        occurredOn: a,
+        notes: data.notes,
+      });
+      setCapitalAdjustOpen(false);
+      await load({ soft: true });
+      await notifyDataChanged();
+    } catch (e) {
+      Alert.alert('Could not save', e?.message ?? 'Try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleBreakage = async (data) => {
     if (!user?.id) return;
     if (!data.productId) {
@@ -331,10 +366,11 @@ export default function FinanceScreen() {
         tone: 'profit',
         hint: 'Cash On Hand',
         compact: true,
+        onPress: () => setCapitalAdjustOpen(true),
       },
       {
         key: 'stock-value',
-        label: 'Total Stock Value',
+        label: 'Stock Order Value',
         value: summary?.current?.stockValue ?? 0,
         icon: 'cube-outline',
         tone: 'blue',
@@ -374,7 +410,7 @@ export default function FinanceScreen() {
       { key: 'breakage', label: 'Breakage Loss', value: summary?.period?.breakageLoss ?? 0, icon: 'warning-outline', tone: 'red' },
       { key: 'net-profit', label: 'Net Profit', value: summary?.period?.netProfit ?? 0, icon: 'trending-up-outline', tone: 'profit', highlight: true },
       { key: 'transactions', label: 'Total Transactions', value: summary?.period?.totalTransactions ?? 0, icon: 'swap-horizontal-outline', tone: 'blue', isCount: true },
-      { key: 'avg-sale', label: 'Average Sale Value', value: summary?.period?.averageSaleValue ?? 0, icon: 'stats-chart-outline', tone: 'blue' },
+      { key: 'goods-sold', label: 'Total goods sold', value: summary?.period?.totalGoodsSold ?? 0, icon: 'cube-outline', tone: 'blue', isCount: true },
     ],
     [summary]
   );
@@ -390,8 +426,13 @@ export default function FinanceScreen() {
   const renderLedgerItem = ({ item }) => {
     const type = item.type;
     const t = financeService.typeLabel(type);
-    const isIn =
-      type === 'profit' || type === 'capital';
+    const isCapitalSubtract =
+      type === 'capital_adjustment' && String(item.notes || '').startsWith('[subtract]');
+    const isOutflow =
+      ['expense', 'withdrawal', 'breakage', 'stock_purchase', 'stock_adjustment', 'sale_reversal', 'profit_reversal'].includes(
+        type
+      ) || isCapitalSubtract;
+    const isIn = !isOutflow;
     return (
       <View style={[styles.ledgerRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.ledgerTop}>
@@ -406,7 +447,7 @@ export default function FinanceScreen() {
           {item.description}
         </Text>
         {item.notes ? (
-          <Text style={[styles.ledgerNotes, { color: colors.textMuted }]} numberOfLines={2}>
+          <Text style={[styles.ledgerNotes, { color: colors.textMuted }]} numberOfLines={10}>
             {item.notes}
           </Text>
         ) : null}
@@ -419,7 +460,7 @@ export default function FinanceScreen() {
           <Text style={[styles.ledgerSub, { color: colors.textMuted }]}>By: {item.withdrawn_by}</Text>
         ) : null}
         <Text style={[styles.ledgerAmount, { color: isIn ? (colors.success ?? '#067647') : colors.text }]}>
-          {formatLedgerAmount(type, item.amount)}
+          {isCapitalSubtract ? `−$${Math.abs(Number(item.amount) || 0).toFixed(2)}` : formatLedgerAmount(type, item.amount)}
         </Text>
         <View style={styles.ledgerActions}>
           <Pressable
@@ -440,7 +481,7 @@ export default function FinanceScreen() {
           </Pressable>
           <Pressable
             onPress={() =>
-              Alert.alert('Delete entry?', 'This will permanently remove this ledger record.', [
+              Alert.alert('Hide entry?', 'This removes the row from your ledger view only. Totals and capital are not changed.', [
                 { text: 'Cancel', style: 'cancel' },
                 {
                   text: 'Delete',
@@ -485,8 +526,10 @@ export default function FinanceScreen() {
 
     const valueLabel = item.isCount ? String(Math.round(Number(item.value) || 0)) : formatMoney(item.value);
     return (
-      <View
+      <Pressable
         key={item.key}
+        disabled={!item.onPress}
+        onPress={item.onPress}
         style={[
           item.compact ? styles.metricCardFour : styles.metricCard,
           {
@@ -508,7 +551,7 @@ export default function FinanceScreen() {
             {item.hint}
           </Text>
         ) : null}
-      </View>
+      </Pressable>
     );
   };
 
@@ -659,7 +702,7 @@ export default function FinanceScreen() {
       <Modal visible={actionsOpen} transparent animationType="fade" onRequestClose={() => setActionsOpen(false)}>
         <View style={styles.actionModalOverlay}>
           <Pressable style={styles.actionBackdrop} onPress={() => setActionsOpen(false)} />
-          <View style={[styles.actionSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={[styles.actionSheet, { backgroundColor: colors.surface, borderColor: colors.border, paddingBottom: Math.max(10, insets.bottom + 4) }]}>
             <Text style={[styles.actionSheetTitle, { color: colors.text }]}>Quick Actions</Text>
             <Pressable style={styles.dropdownItem} onPress={() => openActionById('expense')}>
               <Text style={[styles.dropdownItemText, { color: colors.text }]}>Add Expense</Text>
@@ -677,7 +720,7 @@ export default function FinanceScreen() {
         </View>
       </Modal>
       <Modal visible={editLedgerOpen} transparent animationType="fade" onRequestClose={() => setEditLedgerOpen(false)}>
-        <View style={styles.actionModalOverlay}>
+        <KeyboardAvoidingView style={styles.actionModalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <Pressable style={styles.actionBackdrop} onPress={() => setEditLedgerOpen(false)} />
           <View style={[styles.actionSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.actionSheetTitle, { color: colors.text }]}>Edit Ledger Entry</Text>
@@ -742,7 +785,7 @@ export default function FinanceScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <ExpenseModal
@@ -764,6 +807,13 @@ export default function FinanceScreen() {
         onClose={() => setCapitalOpen(false)}
         colors={colors}
         onSave={handleCapital}
+        busy={saving}
+      />
+      <CapitalAdjustmentModal
+        visible={capitalAdjustOpen}
+        onClose={() => setCapitalAdjustOpen(false)}
+        colors={colors}
+        onSave={handleCapitalAdjustment}
         busy={saving}
       />
       <BreakageModal

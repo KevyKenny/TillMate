@@ -4,10 +4,11 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  View,
+  ToastAndroid,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -72,7 +73,11 @@ export default function AddProductScreen() {
       await notifyDataChanged();
       Alert.alert('Saved', 'Product added to stock.');
     } catch (e) {
-      Alert.alert('Error', e?.message ?? 'Could not save product.');
+      if (Platform.OS === 'android' && String(e?.message || '').startsWith('Insufficient capital')) {
+        ToastAndroid.show(e.message, ToastAndroid.LONG);
+      } else {
+        Alert.alert('Error', e?.message ?? 'Could not save product.');
+      }
     } finally {
       setSaving(false);
     }
@@ -85,8 +90,9 @@ export default function AddProductScreen() {
       <ScreenHeader title="Add product" subtitle="Selling price, category, and cost required." />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.form}>
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
+        <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
           <Text style={[styles.label, { color: colors.text }]}>Name</Text>
           <TextInput
             value={name}
@@ -181,7 +187,7 @@ export default function AddProductScreen() {
               {saving ? 'Saving…' : 'Save product'}
             </Text>
           </Pressable>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

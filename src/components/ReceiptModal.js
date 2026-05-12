@@ -1,4 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -31,13 +30,13 @@ export default function ReceiptModal({ visible, receipt, onClose, onPrint }) {
           <View style={styles.sheetHeader}>
             <Text style={[styles.sheetTitle, { color: colors.text }]}>Receipt</Text>
             <View style={styles.headerActions}>
-              <Pressable
+              {/* <Pressable
                 onPress={handlePrint}
                 hitSlop={10}
                 style={[styles.printBtn, { backgroundColor: colors.primary }]}>
                 <Ionicons name="print-outline" size={16} color={colors.onPrimary} />
-                <Text style={[styles.printText, { color: colors.onPrimary }]}>Print</Text>
-              </Pressable>
+                <Text style={[styles.printText, { color: colors.onPrimary }]}></Text>
+              </Pressable> */}
               <Pressable onPress={onClose} hitSlop={12} style={styles.closeHit}>
                 <Text style={[styles.closeText, { color: colors.primary }]}>Done</Text>
               </Pressable>
@@ -149,7 +148,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
   },
-  printBtn: {
+  Btn: {
     minHeight: 34,
     borderRadius: 10,
     paddingHorizontal: 10,
