@@ -4,21 +4,41 @@ Central service for **mobile batch sync**, **backup**, and **admin read APIs**.
 
 ## Deploy on Render
 
-This folder is a **standalone Node API**. The Expo app lives in the repo root — do not use the root `package.json` start command on Render.
+This folder is a **standalone Node API**. The Expo app lives in the repo root (`package.json` has `"main": "expo-router/entry"`). If Render’s start command is empty or `node .`, it can combine **root `main`** + **Root Directory `backend`** and fail with:
+
+`Cannot find module '.../backend/expo-router/entry'`
+
+`render.yaml` in the repo root **does not update an existing manually created service** until you connect the repo as a [Blueprint](https://render.com/docs/infrastructure-as-code) or change **Settings** yourself.
+
+### Option A — Docker (recommended)
+
+| Setting | Value |
+|---------|--------|
+| **Environment** | Docker |
+| **Dockerfile Path** | `backend/Dockerfile` |
+| **Docker Context** | `backend` |
+
+Or create/sync the service from [`render.yaml`](../render.yaml) (uses Docker).
+
+### Option B — Node runtime
 
 | Setting | Value |
 |---------|--------|
 | **Root Directory** | `backend` |
 | **Build Command** | `npm install` |
-| **Start Command** | `npm start` (runs `node src/server.js`) |
+| **Start Command** | `node src/server.js` |
 
-Do **not** use `node .`, `node expo-router/entry`, or `expo start` — those come from the mobile app and cause:
+Do **not** leave Start Command blank, and do **not** use `node .`, `npm start` (if it still fails), `node expo-router/entry`, or `expo start`.
 
-`Cannot find module '.../backend/expo-router/entry'`
+### Option C — commands from repo root (no Root Directory)
 
-**Environment variables** (required): `MONGODB_URI`, `JWT_SECRET`. Optional: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `PORT` (Render sets `PORT` automatically).
+| Setting | Value |
+|---------|--------|
+| **Root Directory** | *(empty)* |
+| **Build Command** | `cd backend && npm install` |
+| **Start Command** | `node backend/src/server.js` |
 
-You can also deploy via the repo root [`render.yaml`](../render.yaml) blueprint.
+**Environment variables** (required): `MONGODB_URI`, `JWT_SECRET`. Optional: `ADMIN_EMAIL`, `ADMIN_PASSWORD`. Render sets `PORT` automatically.
 
 ## Setup
 

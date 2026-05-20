@@ -1,17 +1,20 @@
-# TillMate API on Render — deploy only ./backend (not the Expo mobile app).
-# Dashboard: New > Blueprint, or link this repo and apply the blueprint.
+# TillMate API — monorepo: deploy ./backend only (not the Expo app at repo root).
+#
+# If you created the Render service manually, render.yaml does NOT change it until you
+# link the repo as a Blueprint (Infrastructure as Code) or edit Settings yourself.
+#
+# Manual service fix (Node runtime): Root Directory = backend, Start Command = node src/server.js
+# Or switch to Docker (below) — recommended; ignores root package.json "main".
 services:
   - type: web
     name: tillmate-api
-    runtime: node
-    rootDir: backend
-    buildCommand: npm install
-    startCommand: npm start
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
         value: "20"
-      # Set in Render dashboard (or sync from a secret store):
+      # Set in Render dashboard:
       # - MONGODB_URI
       # - JWT_SECRET
-      # - ADMIN_EMAIL / ADMIN_PASSWORD (optional)
