@@ -10,6 +10,9 @@ const saleItemSchema = new mongoose.Schema(
     productName: { type: String },
     quantity: { type: Number, required: true },
     unitPrice: { type: Number, required: true },
+    reversedQuantity: { type: Number, default: 0 },
+    /** Stable SQLite `sale_items.id` for restore / reversals */
+    clientSaleItemId: { type: Number, default: null },
   },
   { timestamps: true }
 );

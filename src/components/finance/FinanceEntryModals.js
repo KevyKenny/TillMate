@@ -13,6 +13,8 @@ import {
   View,
 } from 'react-native';
 
+import { BREAKAGE_REASON_OPTIONS } from '../../services/financeService';
+
 function todayYmd() {
   return new Date().toLocaleDateString('en-CA');
 }
@@ -347,7 +349,7 @@ export function CapitalAdjustmentModal({ visible, onClose, colors, onSave, busy 
 export function BreakageModal({ visible, onClose, colors, onSave, busy, products }) {
   const [productId, setProductId] = useState(null);
   const [quantity, setQuantity] = useState('1');
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState(BREAKAGE_REASON_OPTIONS[0]);
   const [dateStr, setDateStr] = useState(todayYmd());
   const [notes, setNotes] = useState('');
 
@@ -355,7 +357,7 @@ export function BreakageModal({ visible, onClose, colors, onSave, busy, products
     if (visible) {
       setProductId(null);
       setQuantity('1');
-      setReason('');
+      setReason(BREAKAGE_REASON_OPTIONS[0]);
       setDateStr(todayYmd());
       setNotes('');
     }
@@ -372,7 +374,8 @@ export function BreakageModal({ visible, onClose, colors, onSave, busy, products
             </Pressable>
           </View>
           <Text style={[styles.hint, { color: colors.textMuted }]}>
-            Select a product. Stock will be reduced and the loss value recorded in your ledger.
+            Select a product. Stock is reduced at cost. Breakage appears on the ledger for your records and does not change net profit or
+            available capital.
           </Text>
           <FlatList
             data={products}
@@ -405,13 +408,29 @@ export function BreakageModal({ visible, onClose, colors, onSave, busy, products
               style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
             />
             <FieldLabel colors={colors}>Reason *</FieldLabel>
-            <TextInput
-              value={reason}
-              onChangeText={setReason}
-              placeholder="e.g. damaged, expired"
-              placeholderTextColor={colors.textMuted}
-              style={[styles.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
-            />
+            <View style={styles.breakageReasonRow}>
+              {BREAKAGE_REASON_OPTIONS.map((opt) => (
+                <Pressable
+                  key={opt}
+                  onPress={() => setReason(opt)}
+                  style={[
+                    styles.breakageReasonChip,
+                    {
+                      borderColor: reason === opt ? colors.primary : colors.border,
+                      backgroundColor: reason === opt ? colors.primaryMuted ?? 'rgba(0,0,0,0.06)' : colors.inputBg,
+                    },
+                  ]}>
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: '800',
+                      color: reason === opt ? colors.primary : colors.text,
+                    }}>
+                    {opt}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
             <FieldLabel colors={colors}>Date (YYYY-MM-DD) *</FieldLabel>
             <TextInput
               value={dateStr}
@@ -453,6 +472,16 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 18, fontWeight: '900' },
   form: { padding: 4, paddingBottom: 32 },
   formTight: { paddingBottom: 32 },
+  breakageReasonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+  breakageReasonChip: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   label: { fontSize: 12, fontWeight: '700', marginBottom: 6, marginTop: 4 },
   input: {
     borderWidth: 1,

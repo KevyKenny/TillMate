@@ -1,7 +1,7 @@
 import { getDb } from '../database/db';
 import { recordProfitFromSaleInTransaction, recordProfitReversalForSaleInTransaction } from './financeService';
 import { recordStockEventInTransaction } from './stockService';
-import { enqueueProductSync, enqueueSaleSync } from './syncService';
+import { enqueueFinanceSync, enqueueProductSync, enqueueSaleSync, enqueueStockEventSync } from './syncService';
 
 function localSaleDateYmd() {
   return new Date().toLocaleDateString('en-CA');
@@ -108,6 +108,8 @@ export async function completeSaleForUser(userId, lines, paidAmount, paymentMeth
 
   let saleId = 0;
   const productMeta = new Map();
+  const stockEventIds = [];
+  let profitFinanceId = null;
   await db.withTransactionAsync(async () => {
     for (const line of lines) {
       const row = await db.getFirstAsync(
@@ -133,7 +135,7 @@ export async function completeSaleForUser(userId, lines, paidAmount, paymentMeth
          VALUES (?, ?, ?, ?, ?);`,
         [saleId, line.productId, line.quantity, line.unitPrice, name]
       );
-      await recordStockEventInTransaction(db, {
+      const seId = await recordStockEventInTransaction(db, {
         userId,
         productId: line.productId,
         eventType: 'sale',
@@ -142,8 +144,9 @@ export async function completeSaleForUser(userId, lines, paidAmount, paymentMeth
         referenceType: 'sale',
         referenceId: saleId,
       });
+      if (seId) stockEventIds.push(seId);
     }
-    await recordProfitFromSaleInTransaction(db, userId, saleId, saleDate, lines);
+    profitFinanceId = await recordProfitFromSaleInTransaction(db, userId, saleId, saleDate, lines);
   });
 
   const row = await db.getFirstAsync(`SELECT created_at FROM sales WHERE id = ? AND owner_user_id = ?;`, [
@@ -153,6 +156,10 @@ export async function completeSaleForUser(userId, lines, paidAmount, paymentMeth
   enqueueSaleSync(userId, saleId).catch(() => {});
   for (const line of lines) {
     enqueueProductSync(userId, line.productId).catch(() => {});
+  }
+  if (profitFinanceId) enqueueFinanceSync(userId, profitFinanceId).catch(() => {});
+  for (const sid of stockEventIds) {
+    enqueueStockEventSync(userId, sid).catch(() => {});
   }
   return { saleId, total, paid, changeAmount, paymentMethod, createdAt: row?.created_at ?? null };
 }
@@ -168,6 +175,9 @@ export async function reverseSaleItemsForUser(userId, saleId, reverseLines, reas
   const detailParts = [];
   const profitLines = [];
   const productIdsToSync = new Set();
+  const stockEventIds = [];
+  let saleReversalFinanceId = null;
+  let profitReversalFinanceId = null;
   await db.withTransactionAsync(async () => {
     const sale = await db.getFirstAsync(
       `SELECT id, total, sale_date FROM sales WHERE id = ? AND owner_user_id = ?;`,
@@ -198,7 +208,7 @@ export async function reverseSaleItemsForUser(userId, saleId, reverseLines, reas
         `SELECT cost_price FROM products WHERE id = ? AND owner_user_id = ?;`,
         [item.product_id, userId]
       );
-      await recordStockEventInTransaction(db, {
+      const seId = await recordStockEventInTransaction(db, {
         userId,
         productId: item.product_id,
         eventType: 'adjustment',
@@ -208,6 +218,7 @@ export async function reverseSaleItemsForUser(userId, saleId, reverseLines, reas
         referenceId: saleId,
         notes: String(reason || '').trim() || 'Sale reversal',
       });
+      if (seId) stockEventIds.push(seId);
       const lineValue = qtyToReverse * Number(item.unit_price || 0);
       reversalValue += lineValue;
       const nm = (item.product_name || '').trim() || `Product #${item.product_id}`;
@@ -237,7 +248,7 @@ export async function reverseSaleItemsForUser(userId, saleId, reverseLines, reas
     ]
       .filter(Boolean)
       .join('\n');
-    await db.runAsync(
+    const saleRevIns = await db.runAsync(
       `INSERT INTO finance_transactions (owner_user_id, type, amount, occurred_on, description, notes, sale_id)
        VALUES (?, 'sale_reversal', ?, ?, ?, ?, ?);`,
       [
@@ -249,11 +260,17 @@ export async function reverseSaleItemsForUser(userId, saleId, reverseLines, reas
         saleId,
       ]
     );
-    await recordProfitReversalForSaleInTransaction(db, userId, saleId, profitDate, profitLines);
+    saleReversalFinanceId = Number(saleRevIns.lastInsertRowId);
+    profitReversalFinanceId = await recordProfitReversalForSaleInTransaction(db, userId, saleId, profitDate, profitLines);
   });
   enqueueSaleSync(userId, saleId).catch(() => {});
   for (const pid of productIdsToSync) {
     enqueueProductSync(userId, pid).catch(() => {});
+  }
+  if (saleReversalFinanceId) enqueueFinanceSync(userId, saleReversalFinanceId).catch(() => {});
+  if (profitReversalFinanceId) enqueueFinanceSync(userId, profitReversalFinanceId).catch(() => {});
+  for (const sid of stockEventIds) {
+    enqueueStockEventSync(userId, sid).catch(() => {});
   }
   return { reversedValue: reversalValue };
 }

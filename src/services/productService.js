@@ -1,7 +1,7 @@
 import { getDb } from '../database/db';
 import { addStockMovementEntryInTransaction, getAllTimeSummary } from './financeService';
 import { recordStockEventInTransaction } from './stockService';
-import { enqueueProductSync } from './syncService';
+import { enqueueFinanceSync, enqueueProductSync, enqueueStockEventSync, enqueueSyncOperation } from './syncService';
 
 function assertUserId(userId) {
   if (!userId) throw new Error('User session is required.');
@@ -159,6 +159,8 @@ export async function addProduct({ userId, name, price, stock, category, costPri
   }
 
   let newId = 0;
+  let stockEventId = null;
+  let financeId = null;
   await db.withTransactionAsync(async () => {
     const result = await db.runAsync(
       `INSERT INTO products (owner_user_id, name, price, stock, category, cost_price, updated_at)
@@ -167,7 +169,7 @@ export async function addProduct({ userId, name, price, stock, category, costPri
     );
     newId = Number(result.lastInsertRowId);
     if (initialStock > 0) {
-      await recordStockEventInTransaction(db, {
+      stockEventId = await recordStockEventInTransaction(db, {
         userId,
         productId: newId,
         eventType: 'stock_addition',
@@ -190,7 +192,7 @@ export async function addProduct({ userId, name, price, stock, category, costPri
         reason: 'Initial stock when adding this product',
         source: 'add_product',
       });
-      await addStockMovementEntryInTransaction(db, {
+      financeId = await addStockMovementEntryInTransaction(db, {
         userId,
         type: 'stock_purchase',
         amount: Math.abs(difference),
@@ -204,6 +206,8 @@ export async function addProduct({ userId, name, price, stock, category, costPri
     }
   });
   enqueueProductSync(userId, newId).catch(() => {});
+  if (stockEventId) enqueueStockEventSync(userId, stockEventId).catch(() => {});
+  if (financeId) enqueueFinanceSync(userId, financeId).catch(() => {});
   return newId;
 }
 
@@ -263,6 +267,8 @@ export async function updateProduct({ userId, id, name, price, stock, category, 
     await ensureCapitalForInventoryValueIncrease(userId, difference);
   }
 
+  let stockEventId = null;
+  let financeId = null;
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `UPDATE products
@@ -271,7 +277,7 @@ export async function updateProduct({ userId, id, name, price, stock, category, 
       [trimmed, Number(price), cat, cost, id, userId]
     );
     if (qtyDelta !== 0) {
-      await recordStockEventInTransaction(db, {
+      stockEventId = await recordStockEventInTransaction(db, {
         userId,
         productId: id,
         eventType: 'stock_edition',
@@ -295,7 +301,7 @@ export async function updateProduct({ userId, id, name, price, stock, category, 
         source: 'inventory_edit',
       });
       if (difference > 0) {
-        await addStockMovementEntryInTransaction(db, {
+        financeId = await addStockMovementEntryInTransaction(db, {
           userId,
           type: 'stock_purchase',
           amount: difference,
@@ -307,7 +313,7 @@ export async function updateProduct({ userId, id, name, price, stock, category, 
           quantity: newQty,
         });
       } else {
-        await addStockMovementEntryInTransaction(db, {
+        financeId = await addStockMovementEntryInTransaction(db, {
           userId,
           type: 'stock_reversal',
           amount: Math.abs(difference),
@@ -322,6 +328,8 @@ export async function updateProduct({ userId, id, name, price, stock, category, 
     }
   });
   enqueueProductSync(userId, id).catch(() => {});
+  if (stockEventId) enqueueStockEventSync(userId, stockEventId).catch(() => {});
+  if (financeId) enqueueFinanceSync(userId, financeId).catch(() => {});
 }
 
 export async function adjustStock(userId, productId, delta) {
@@ -349,8 +357,10 @@ export async function adjustStock(userId, productId, delta) {
     await ensureCapitalForInventoryValueIncrease(userId, difference);
   }
 
+  let stockEventId = null;
+  let financeId = null;
   await db.withTransactionAsync(async () => {
-    await recordStockEventInTransaction(db, {
+    stockEventId = await recordStockEventInTransaction(db, {
       userId,
       productId,
       eventType: 'adjustment',
@@ -373,7 +383,7 @@ export async function adjustStock(userId, productId, delta) {
         source: 'manual_adjustment',
       });
       if (difference > 0) {
-        await addStockMovementEntryInTransaction(db, {
+        financeId = await addStockMovementEntryInTransaction(db, {
           userId,
           type: 'stock_purchase',
           amount: difference,
@@ -385,7 +395,7 @@ export async function adjustStock(userId, productId, delta) {
           quantity: newQty,
         });
       } else {
-        await addStockMovementEntryInTransaction(db, {
+        financeId = await addStockMovementEntryInTransaction(db, {
           userId,
           type: 'stock_reversal',
           amount: Math.abs(difference),
@@ -400,6 +410,8 @@ export async function adjustStock(userId, productId, delta) {
     }
   });
   enqueueProductSync(userId, productId).catch(() => {});
+  if (stockEventId) enqueueStockEventSync(userId, stockEventId).catch(() => {});
+  if (financeId) enqueueFinanceSync(userId, financeId).catch(() => {});
 }
 
 /** Soft-delete: product hidden from sales/stock until restored (no DB cascade). */
@@ -430,15 +442,29 @@ export async function restoreProduct(userId, productId) {
 export async function hardDeleteProduct(userId, productId) {
   assertUserId(userId);
   const db = await getDb();
-  let name = '';
+  const p = await db.getFirstAsync(
+    `SELECT id, name, category, price, cost_price, stock, updated_at, deleted_at
+     FROM products WHERE id = ? AND owner_user_id = ?;`,
+    [productId, userId]
+  );
+  if (!p) throw new Error('Product not found.');
+  await enqueueSyncOperation({
+    type: 'product.upsert',
+    payload: {
+      clientProductId: Number(p.id),
+      name: p.name,
+      price: Number(p.price),
+      stock: 0,
+      category: p.category || 'General',
+      costPrice: p.cost_price == null ? null : Number(p.cost_price),
+      deletedAt: new Date().toISOString(),
+      clientUpdatedAt: p.updated_at || undefined,
+    },
+  });
+
+  let name = String(p.name || '');
+  let financeId = null;
   await db.withTransactionAsync(async () => {
-    const p = await db.getFirstAsync(
-      `SELECT id, name, category, price, cost_price, stock
-       FROM products WHERE id = ? AND owner_user_id = ?;`,
-      [productId, userId]
-    );
-    if (!p) throw new Error('Product not found.');
-    name = p.name;
     const remainingQty = Math.max(0, Number(p.stock || 0));
     const unitCost = Math.max(0, Number(p.cost_price || 0));
     const reversalAmount = roundMoney(remainingQty * unitCost);
@@ -457,7 +483,7 @@ export async function hardDeleteProduct(userId, productId) {
       reason: null,
       source: 'delete_product',
     });
-    await addStockMovementEntryInTransaction(db, {
+    financeId = await addStockMovementEntryInTransaction(db, {
       userId,
       type: 'stock_reversal',
       amount: reversalAmount,
@@ -470,6 +496,6 @@ export async function hardDeleteProduct(userId, productId) {
     });
     await db.runAsync(`DELETE FROM products WHERE id = ? AND owner_user_id = ?;`, [productId, userId]);
   });
-  enqueueProductSync(userId, productId).catch(() => {});
+  if (financeId) enqueueFinanceSync(userId, financeId).catch(() => {});
   return name;
 }

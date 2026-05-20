@@ -3,14 +3,17 @@ const Product = require('../models/Product');
 const Sale = require('../models/Sale');
 const SaleItem = require('../models/SaleItem');
 const User = require('../models/User');
+const FinanceTransaction = require('../models/FinanceTransaction');
+const StockEvent = require('../models/StockEvent');
+
+const FINANCE_TYPE_SET = new Set(FinanceTransaction.FINANCE_TYPES || []);
+const STOCK_EVENT_TYPE_SET = new Set(StockEvent.STOCK_EVENT_TYPES || []);
 
 /**
- * POST body: { operations: [{ type, payload }] }
- * types: user.register | product.upsert | sale.upsert
+ * POST /batch body: { operations: [{ type, payload }] }
+ * types: user.register | product.upsert | sale.upsert | finance.upsert | stock_event.upsert
  *
- * user.register — links JWT user to mobile clientUserId / profile (optional first sync)
- * product.upsert — idempotent on (userId, clientProductId)
- * sale.upsert — replaces sale + items for (userId, clientSaleId)
+ * GET /bootstrap — full tenant snapshot for SQLite restore (version 2 adds finance + stock_events).
  */
 async function processBatch(req, res) {
   const userId = new mongoose.Types.ObjectId(req.userId);
@@ -95,6 +98,7 @@ async function processBatch(req, res) {
           changeAmount: s.changeAmount != null ? Number(s.changeAmount) : undefined,
           paymentMethod: String(s.paymentMethod || 'Cash'),
           clientCreatedAt: s.clientCreatedAt || undefined,
+          reversedTotal: s.reversedTotal != null ? Number(s.reversedTotal) : 0,
         };
 
         const sale = await Sale.findOneAndUpdate(
@@ -116,11 +120,75 @@ async function processBatch(req, res) {
             productName: it.productName != null ? String(it.productName) : '',
             quantity: Math.max(1, Math.floor(Number(it.quantity) || 1)),
             unitPrice: Number(it.unitPrice) || 0,
+            reversedQuantity: it.reversedQuantity != null ? Math.max(0, Math.floor(Number(it.reversedQuantity))) : 0,
+            clientSaleItemId: it.clientSaleItemId != null ? Number(it.clientSaleItemId) : null,
           }));
           await SaleItem.insertMany(rows);
         }
 
         results.push({ index, ok: true, type: op.type, serverSaleId: String(sale._id) });
+        continue;
+      }
+
+      if (op.type === 'finance.upsert') {
+        const f = op.payload || {};
+        if (f.clientFinanceId == null) throw new Error('clientFinanceId required');
+        const t = String(f.type || '');
+        if (!FINANCE_TYPE_SET.has(t)) throw new Error(`Invalid finance type: ${t}`);
+
+        const doc = {
+          userId,
+          clientFinanceId: Number(f.clientFinanceId),
+          type: t,
+          amount: Number(f.amount) || 0,
+          occurredOn: String(f.occurredOn || '').trim() || '1970-01-01',
+          description: String(f.description || '').trim() || '',
+          notes: f.notes != null && f.notes !== '' ? String(f.notes) : null,
+          productId: f.productId != null ? Number(f.productId) : null,
+          productName: f.productName != null ? String(f.productName) : null,
+          quantity: f.quantity != null ? Number(f.quantity) : null,
+          withdrawnBy: f.withdrawnBy != null ? String(f.withdrawnBy) : null,
+          capitalSource: f.capitalSource != null ? String(f.capitalSource) : null,
+          saleId: f.saleId != null ? Number(f.saleId) : null,
+          hiddenAt: f.hiddenAt != null && f.hiddenAt !== '' ? String(f.hiddenAt) : null,
+          clientCreatedAt: f.clientCreatedAt || undefined,
+          recoversFinanceId: f.recoversFinanceId != null ? Number(f.recoversFinanceId) : null,
+        };
+
+        const saved = await FinanceTransaction.findOneAndUpdate(
+          { userId, clientFinanceId: doc.clientFinanceId },
+          { $set: doc },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+        results.push({ index, ok: true, type: op.type, serverFinanceId: String(saved._id) });
+        continue;
+      }
+
+      if (op.type === 'stock_event.upsert') {
+        const e = op.payload || {};
+        if (e.clientStockEventId == null) throw new Error('clientStockEventId required');
+        const et = String(e.eventType || '');
+        if (!STOCK_EVENT_TYPE_SET.has(et)) throw new Error(`Invalid stock event type: ${et}`);
+
+        const doc = {
+          userId,
+          clientStockEventId: Number(e.clientStockEventId),
+          productId: Number(e.productId),
+          eventType: et,
+          quantityDelta: Math.trunc(Number(e.quantityDelta) || 0),
+          unitCost: e.unitCost == null || e.unitCost === '' ? null : Number(e.unitCost),
+          referenceType: e.referenceType != null ? String(e.referenceType) : null,
+          referenceId: e.referenceId != null ? Number(e.referenceId) : null,
+          notes: e.notes != null ? String(e.notes) : null,
+          clientCreatedAt: e.clientCreatedAt || undefined,
+        };
+
+        const saved = await StockEvent.findOneAndUpdate(
+          { userId, clientStockEventId: doc.clientStockEventId },
+          { $set: doc },
+          { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+        results.push({ index, ok: true, type: op.type, serverStockEventId: String(saved._id) });
         continue;
       }
 
@@ -143,4 +211,126 @@ async function processBatch(req, res) {
   });
 }
 
-module.exports = { processBatch };
+async function getBootstrap(req, res) {
+  const userId = new mongoose.Types.ObjectId(req.userId);
+  const user = await User.findById(userId).select('-passwordHash').lean();
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const [products, sales, financeRows, stockRows] = await Promise.all([
+    Product.find({ userId }).sort({ clientProductId: 1 }).lean(),
+    Sale.find({ userId }).sort({ clientSaleId: 1 }).lean(),
+    FinanceTransaction.find({ userId }).sort({ clientFinanceId: 1 }).lean(),
+    StockEvent.find({ userId }).sort({ clientStockEventId: 1 }).lean(),
+  ]);
+
+  const saleIds = sales.map((s) => s._id);
+  const allItems =
+    saleIds.length > 0
+      ? await SaleItem.find({ saleId: { $in: saleIds } })
+          .sort({ clientSaleId: 1, clientItemIndex: 1 })
+          .lean()
+      : [];
+
+  const itemsBySaleId = new Map();
+  for (const it of allItems) {
+    const key = String(it.saleId);
+    if (!itemsBySaleId.has(key)) itemsBySaleId.set(key, []);
+    itemsBySaleId.get(key).push({
+      clientItemIndex: it.clientItemIndex,
+      clientSaleItemId: it.clientSaleItemId != null ? Number(it.clientSaleItemId) : null,
+      productId: it.productId,
+      productName: it.productName || '',
+      quantity: it.quantity,
+      unitPrice: it.unitPrice,
+      reversedQuantity: it.reversedQuantity != null ? Number(it.reversedQuantity) : 0,
+    });
+  }
+
+  const productsOut = products.map((p) => ({
+    clientProductId: p.clientProductId,
+    name: p.name,
+    price: p.price,
+    stock: p.stock,
+    category: p.category,
+    costPrice: p.costPrice,
+    deletedAt: p.deletedAt ? new Date(p.deletedAt).toISOString() : null,
+    clientCreatedAt: p.clientCreatedAt,
+    clientUpdatedAt: p.clientUpdatedAt,
+    createdAt: p.createdAt ? new Date(p.createdAt).toISOString() : undefined,
+    updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : undefined,
+  }));
+
+  const salesOut = sales.map((s) => ({
+    clientSaleId: s.clientSaleId,
+    total: s.total,
+    saleDate: s.saleDate,
+    paidAmount: s.paidAmount,
+    changeAmount: s.changeAmount,
+    paymentMethod: s.paymentMethod,
+    clientCreatedAt: s.clientCreatedAt,
+    reversedTotal: s.reversedTotal != null ? Number(s.reversedTotal) : 0,
+    createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : undefined,
+    items: itemsBySaleId.get(String(s._id)) || [],
+  }));
+
+  const financeOut = financeRows.map((f) => ({
+    clientFinanceId: f.clientFinanceId,
+    type: f.type,
+    amount: f.amount,
+    occurredOn: f.occurredOn,
+    description: f.description,
+    notes: f.notes,
+    productId: f.productId,
+    productName: f.productName,
+    quantity: f.quantity,
+    withdrawnBy: f.withdrawnBy,
+    capitalSource: f.capitalSource,
+    saleId: f.saleId,
+    hiddenAt: f.hiddenAt,
+    clientCreatedAt: f.clientCreatedAt,
+    recoversFinanceId: f.recoversFinanceId,
+    createdAt: f.createdAt ? new Date(f.createdAt).toISOString() : undefined,
+  }));
+
+  const stockOut = stockRows.map((e) => ({
+    clientStockEventId: e.clientStockEventId,
+    productId: e.productId,
+    eventType: e.eventType,
+    quantityDelta: e.quantityDelta,
+    unitCost: e.unitCost,
+    referenceType: e.referenceType,
+    referenceId: e.referenceId,
+    notes: e.notes,
+    clientCreatedAt: e.clientCreatedAt,
+    createdAt: e.createdAt ? new Date(e.createdAt).toISOString() : undefined,
+  }));
+
+  return res.json({
+    version: 2,
+    user: {
+      id: String(user._id),
+      clientUserId: user.clientUserId,
+      phone: user.phone,
+      email: user.email,
+      fullName: user.fullName,
+      streetAddress: user.streetAddress,
+      city: user.city,
+      shopName: user.shopName,
+      shopNumber: user.shopNumber,
+    },
+    products: productsOut,
+    sales: salesOut,
+    financeTransactions: financeOut,
+    stockEvents: stockOut,
+    meta: {
+      productCount: productsOut.length,
+      saleCount: salesOut.length,
+      financeCount: financeOut.length,
+      stockEventCount: stockOut.length,
+    },
+  });
+}
+
+module.exports = { processBatch, getBootstrap };

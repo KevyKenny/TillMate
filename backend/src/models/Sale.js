@@ -10,6 +10,7 @@ const saleSchema = new mongoose.Schema(
     changeAmount: { type: Number },
     paymentMethod: { type: String, default: 'Cash' },
     clientCreatedAt: { type: String },
+    reversedTotal: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -188,6 +188,45 @@ async function migrate(db) {
       CREATE INDEX IF NOT EXISTS idx_finance_owner_type ON finance_transactions (owner_user_id, type);
     `);
   }
+
+  const financeTable3 = await db.getFirstAsync(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'finance_transactions';`
+  );
+  const financeSql3 = String(financeTable3?.sql || '');
+  if (financeSql3 && !financeSql3.includes("'breakage_reversal'")) {
+    await db.execAsync(`
+      ALTER TABLE finance_transactions RENAME TO finance_transactions_old;
+      CREATE TABLE finance_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_user_id INTEGER NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('expense','withdrawal','breakage','breakage_reversal','capital','profit','stock_purchase','stock_adjustment','capital_adjustment','stock_reversal','sale_reversal','profit_reversal')),
+        amount REAL NOT NULL CHECK (amount >= 0),
+        occurred_on TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        notes TEXT,
+        product_id INTEGER,
+        product_name TEXT,
+        quantity INTEGER,
+        withdrawn_by TEXT,
+        capital_source TEXT,
+        sale_id INTEGER,
+        hidden_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        recovers_finance_id INTEGER
+      );
+      INSERT INTO finance_transactions (
+        id, owner_user_id, type, amount, occurred_on, description, notes,
+        product_id, product_name, quantity, withdrawn_by, capital_source, sale_id, hidden_at, created_at, recovers_finance_id
+      )
+      SELECT
+        id, owner_user_id, type, amount, occurred_on, description, notes,
+        product_id, product_name, quantity, withdrawn_by, capital_source, sale_id, hidden_at, created_at, NULL
+      FROM finance_transactions_old;
+      DROP TABLE finance_transactions_old;
+      CREATE INDEX IF NOT EXISTS idx_finance_owner_date ON finance_transactions (owner_user_id, occurred_on);
+      CREATE INDEX IF NOT EXISTS idx_finance_owner_type ON finance_transactions (owner_user_id, type);
+    `);
+  }
 }
 
 async function runSchemaSetup(db) {
@@ -261,7 +300,7 @@ async function runSchemaSetup(db) {
     CREATE TABLE IF NOT EXISTS finance_transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       owner_user_id INTEGER NOT NULL,
-      type TEXT NOT NULL CHECK (type IN ('expense','withdrawal','breakage','capital','profit','stock_purchase','stock_adjustment','capital_adjustment','stock_reversal','sale_reversal','profit_reversal')),
+      type TEXT NOT NULL CHECK (type IN ('expense','withdrawal','breakage','breakage_reversal','capital','profit','stock_purchase','stock_adjustment','capital_adjustment','stock_reversal','sale_reversal','profit_reversal')),
       amount REAL NOT NULL CHECK (amount >= 0),
       occurred_on TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
@@ -273,7 +312,8 @@ async function runSchemaSetup(db) {
       capital_source TEXT,
       sale_id INTEGER,
       hidden_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      recovers_finance_id INTEGER
     );
   `);
   await db.execAsync(
@@ -286,6 +326,23 @@ async function runSchemaSetup(db) {
   if (!financeCols.has('hidden_at')) {
     await db.execAsync(`ALTER TABLE finance_transactions ADD COLUMN hidden_at TEXT;`);
   }
+  if (!financeCols.has('recovers_finance_id')) {
+    await db.execAsync(`ALTER TABLE finance_transactions ADD COLUMN recovers_finance_id INTEGER;`);
+  }
+  // Legacy capital_adjustment rows stored direction in notes as "[subtract]" / "[add]" — move to capital_source and strip from notes for display.
+  await db.execAsync(`
+    UPDATE finance_transactions
+    SET capital_source = 'subtract',
+        notes = NULLIF(trim(replace(replace(substr(notes, 11), char(10), ''), char(13), '')), '')
+    WHERE type = 'capital_adjustment'
+      AND notes LIKE '[subtract]%';
+
+    UPDATE finance_transactions
+    SET capital_source = 'add',
+        notes = NULLIF(trim(replace(replace(substr(notes, 6), char(10), ''), char(13), '')), '')
+    WHERE type = 'capital_adjustment'
+      AND notes LIKE '[add]%';
+  `);
   const salesCols = await columnNames(db, 'sales');
   if (!salesCols.has('reversed_total')) {
     await db.execAsync(`ALTER TABLE sales ADD COLUMN reversed_total REAL NOT NULL DEFAULT 0;`);

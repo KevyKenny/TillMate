@@ -89,6 +89,24 @@ export async function cloudSyncBatch(token, body) {
   return data;
 }
 
+/**
+ * @param {string} token
+ */
+export async function cloudFetchBootstrap(token) {
+  const base = getApiBaseUrl();
+  const res = await fetchWithTimeout(`${base}/api/sync/bootstrap`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await parseJsonResponse(res);
+  if (!res.ok) {
+    const err = new Error(data.error || data.message || `Bootstrap failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
 export async function cloudHealthCheck() {
   const base = getApiBaseUrl();
   const res = await fetchWithTimeout(`${base}/health`, { method: 'GET' });

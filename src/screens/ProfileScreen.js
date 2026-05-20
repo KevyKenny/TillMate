@@ -1,7 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useMemo, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ScreenHeader from '../components/ScreenHeader';
 import ThermalPrinterSection from '../components/ThermalPrinterSection';
@@ -26,6 +37,7 @@ function TabButton({ label, active, onPress, colors, ui }) {
 
 export default function ProfileScreen() {
   const { colors } = useAppTheme();
+  const insets = useSafeAreaInsets();
   const { user, updateProfile, changePassword, deleteAccount } = useAuth();
   const stylesMemo = useMemo(() => makeStyles(), []);
 
@@ -113,7 +125,14 @@ export default function ProfileScreen() {
   return (
     <SafeAreaView style={[stylesMemo.safe, { backgroundColor: colors.background }]} edges={['top']}>
       <ScreenHeader title="Profile" subtitle="Manage your account settings" />
-      <ScrollView contentContainerStyle={stylesMemo.content}>
+      <KeyboardAvoidingView
+        style={stylesMemo.flex1}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 72 : 0}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={stylesMemo.content}>
         <View style={stylesMemo.tabsRow}>
           <TabButton label="Profile" active={rootTab === 'profile'} onPress={() => setRootTab('profile')} colors={colors} ui={stylesMemo} />
           <TabButton label="Edit profile" active={rootTab === 'change'} onPress={() => setRootTab('change')} colors={colors} ui={stylesMemo} />
@@ -252,43 +271,52 @@ export default function ProfileScreen() {
         ) : (
           <ThermalPrinterSection colors={colors} />
         )}
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
       <Modal visible={deleteOpen} transparent animationType="fade" onRequestClose={() => setDeleteOpen(false)}>
         <View style={stylesMemo.modalOverlay}>
           <Pressable style={stylesMemo.modalBackdrop} onPress={() => setDeleteOpen(false)} />
-          <View style={[stylesMemo.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[stylesMemo.modalTitle, { color: colors.text }]}>Confirm account deletion</Text>
-            <Text style={[stylesMemo.readOnlyLabel, { color: colors.textMuted }]}>Enter your phone number and password to confirm owner access.</Text>
-            <TextInput
-              value={deletePhone}
-              onChangeText={setDeletePhone}
-              keyboardType="phone-pad"
-              placeholder="Phone number"
-              placeholderTextColor={colors.textMuted}
-              style={[stylesMemo.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
-            />
-            <TextInput
-              value={deletePassword}
-              onChangeText={setDeletePassword}
-              placeholder="Password"
-              placeholderTextColor={colors.textMuted}
-              secureTextEntry
-              style={[stylesMemo.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
-            />
-            <View style={stylesMemo.modalActions}>
-              <Pressable onPress={() => setDeleteOpen(false)} style={[stylesMemo.modalGhost, { borderColor: colors.border }]}>
-                <Text style={[stylesMemo.modalGhostTxt, { color: colors.text }]}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={onDeleteAccount}
-                disabled={deletingAccount}
-                style={[stylesMemo.modalSave, { backgroundColor: colors.danger ?? '#b42318' }, deletingAccount && { opacity: 0.7 }]}>
-                <Text style={[stylesMemo.modalSaveTxt, { color: colors.onPrimary }]}>
-                  {deletingAccount ? 'Deleting...' : 'Delete'}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={stylesMemo.modalKb}>
+            <Pressable onPress={(e) => e.stopPropagation()} style={stylesMemo.modalPressableInner}>
+              <View style={[stylesMemo.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Text style={[stylesMemo.modalTitle, { color: colors.text }]}>Confirm account deletion</Text>
+                <Text style={[stylesMemo.readOnlyLabel, { color: colors.textMuted }]}>
+                  Enter your phone number and password to confirm owner access.
                 </Text>
-              </Pressable>
-            </View>
-          </View>
+                <TextInput
+                  value={deletePhone}
+                  onChangeText={setDeletePhone}
+                  keyboardType="phone-pad"
+                  placeholder="Phone number"
+                  placeholderTextColor={colors.textMuted}
+                  style={[stylesMemo.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+                />
+                <TextInput
+                  value={deletePassword}
+                  onChangeText={setDeletePassword}
+                  placeholder="Password"
+                  placeholderTextColor={colors.textMuted}
+                  secureTextEntry
+                  style={[stylesMemo.input, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text }]}
+                />
+                <View style={stylesMemo.modalActions}>
+                  <Pressable onPress={() => setDeleteOpen(false)} style={[stylesMemo.modalGhost, { borderColor: colors.border }]}>
+                    <Text style={[stylesMemo.modalGhostTxt, { color: colors.text }]}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={onDeleteAccount}
+                    disabled={deletingAccount}
+                    style={[stylesMemo.modalSave, { backgroundColor: colors.danger ?? '#b42318' }, deletingAccount && { opacity: 0.7 }]}>
+                    <Text style={[stylesMemo.modalSaveTxt, { color: colors.onPrimary }]}>
+                      {deletingAccount ? 'Deleting...' : 'Delete'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            </Pressable>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
     </SafeAreaView>
@@ -298,6 +326,7 @@ export default function ProfileScreen() {
 function makeStyles() {
   return StyleSheet.create({
     safe: { flex: 1 },
+    flex1: { flex: 1 },
     content: { padding: 18, gap: 12, paddingBottom: 28 },
     panel: { borderWidth: 1, borderRadius: 14, padding: 14 },
     tabsRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
@@ -332,11 +361,22 @@ function makeStyles() {
       ...StyleSheet.absoluteFillObject,
       backgroundColor: 'rgba(0,0,0,0.35)',
     },
+    modalKb: {
+      flex: 1,
+      width: '100%',
+      justifyContent: 'center',
+    },
+    modalPressableInner: {
+      width: '100%',
+      maxHeight: '100%',
+    },
     modalCard: {
       borderWidth: 1,
       borderRadius: 14,
       padding: 14,
       gap: 8,
+      width: '100%',
+      maxHeight: '92%',
     },
     modalTitle: {
       fontSize: 18,

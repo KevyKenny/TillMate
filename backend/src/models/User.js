@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 const userSchema = new mongoose.Schema(
   {
     clientUserId: { type: Number, index: true, sparse: true },
-    email: { type: String, trim: true, lowercase: true, sparse: true },
+    email: { type: String, trim: true, lowercase: true, sparse: true, unique: true },
     phone: { type: String, trim: true, required: true, unique: true },
     passwordHash: { type: String },
     fullName: { type: String, required: true, trim: true },
@@ -18,7 +18,5 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-userSchema.index({ email: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('User', userSchema);

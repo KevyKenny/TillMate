@@ -235,9 +235,9 @@ export default function InventoryScreen() {
     }
   };
 
-  const editModalCardMax = Math.min(windowHeight * 0.94, windowHeight - 24);
-  /** Room for title, paddings, and Save/Cancel row — keeps the form scroll inside the card. */
-  const editModalScrollMax = Math.max(260, editModalCardMax - 200);
+  /** Caps form scroll area; uses window height (post–keyboard-resize on Android) so the sheet stays usable. */
+  const editModalScrollMax = Math.max(180, Math.min(windowHeight * 0.62, windowHeight - 230));
+
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return items;
@@ -545,16 +545,17 @@ export default function InventoryScreen() {
         <View style={styles.modalBackdrop}>
           <Pressable style={StyleSheet.absoluteFillObject} onPress={closeEdit} accessibilityLabel="Close" />
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            // Android: `height` shrinks this view with the keyboard and collapses the card; rely on
+            // window resize + ScrollView instead. iOS: `padding` lifts content above the keyboard.
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             style={styles.modalKb}>
-            <Pressable onPress={(e) => e.stopPropagation()}>
+            <Pressable onPress={(e) => e.stopPropagation()} style={styles.modalPressableInner}>
               <View
                 style={[
                   styles.modalCard,
                   {
                     backgroundColor: colors.surface,
                     borderColor: colors.border,
-                    maxHeight: editModalCardMax,
                   },
                 ]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>Edit product</Text>
@@ -879,12 +880,19 @@ function makeStyles() {
       padding: 16,
     },
     modalKb: {
+      flex: 1,
       width: '100%',
+      justifyContent: 'center',
+    },
+    modalPressableInner: {
+      width: '100%',
+      maxHeight: '100%',
     },
     modalCard: {
       borderRadius: 16,
       borderWidth: 1,
       width: '100%',
+      maxHeight: '92%',
       padding: 16,
     },
     modalTitle: {
@@ -894,6 +902,7 @@ function makeStyles() {
     },
     modalScroll: {
       flexGrow: 0,
+      flexShrink: 1,
     },
     modalScrollContent: {
       paddingBottom: 8,

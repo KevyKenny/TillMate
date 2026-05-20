@@ -1,5 +1,5 @@
 import { getDb } from '../database/db';
-import { enqueueProductSync } from './syncService';
+import { enqueueProductSync, enqueueStockEventSync } from './syncService';
 
 function assertUserId(userId) {
   if (!userId) throw new Error('User session is required.');
@@ -20,7 +20,7 @@ export async function recordStockEventInTransaction(
 ) {
   assertUserId(userId);
   const delta = Math.trunc(Number(quantityDelta) || 0);
-  if (!delta) return;
+  if (!delta) return null;
 
   const product = await db.getFirstAsync(
     `SELECT stock FROM products
@@ -39,12 +39,13 @@ export async function recordStockEventInTransaction(
      WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL;`,
     [nextStock, productId, userId]
   );
-  await db.runAsync(
+  const ins = await db.runAsync(
     `INSERT INTO stock_events (
       owner_user_id, product_id, event_type, quantity_delta, unit_cost, reference_type, reference_id, notes
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
     [userId, productId, eventType, delta, unitCost, referenceType, referenceId, notes]
   );
+  return Number(ins.lastInsertRowId);
 }
 
 export async function applyStockAdjustment({
@@ -59,8 +60,9 @@ export async function applyStockAdjustment({
 }) {
   assertUserId(userId);
   const db = await getDb();
+  let stockEventId = null;
   await db.withTransactionAsync(async () => {
-    await recordStockEventInTransaction(db, {
+    stockEventId = await recordStockEventInTransaction(db, {
       userId,
       productId,
       eventType,
@@ -72,4 +74,5 @@ export async function applyStockAdjustment({
     });
   });
   enqueueProductSync(userId, productId).catch(() => {});
+  if (stockEventId) enqueueStockEventSync(userId, stockEventId).catch(() => {});
 }

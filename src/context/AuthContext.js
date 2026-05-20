@@ -13,6 +13,7 @@ import {
   maybeEnqueueInitialFullSync,
   runPostLoginCloudSync,
   startBackgroundSync,
+  tryPullCloudBootstrapIntoDb,
 } from '../services/syncService';
 
 const SESSION_KEY = '@pos_auth_session_v1';
@@ -79,7 +80,9 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!authReady || !user) return undefined;
-    flushOutboxBestEffort().catch(() => {});
+    InteractionManager.runAfterInteractions(() => {
+      flushOutboxBestEffort().catch(() => {});
+    });
     return undefined;
   }, [authReady, user]);
 
@@ -133,8 +136,13 @@ export function AuthProvider({ children }) {
     InteractionManager.runAfterInteractions(() => {
       void (async () => {
         await ensureCloudSessionAfterSignup(payload, Number(created.id)).catch(() => {});
-        await maybeEnqueueInitialFullSync(Number(created.id)).catch(() => {});
-        await drainOutboxUntilEmpty();
+        const merged = await tryPullCloudBootstrapIntoDb(Number(created.id)).catch(() => false);
+        if (!merged) {
+          await maybeEnqueueInitialFullSync(Number(created.id)).catch(() => {});
+        } else {
+          await enqueueUserRegisterOperation(Number(created.id)).catch(() => {});
+        }
+        await drainOutboxUntilEmpty().catch(() => {});
       })();
     });
     return profile;
@@ -152,7 +160,9 @@ export function AuthProvider({ children }) {
     const profile = toUserProfile(updated);
     setUser(profile);
     await enqueueUserRegisterOperation(profile.id).catch(() => {});
-    flushOutboxBestEffort().catch(() => {});
+    InteractionManager.runAfterInteractions(() => {
+      flushOutboxBestEffort().catch(() => {});
+    });
     return profile;
   }, [user?.id]);
 

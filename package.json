@@ -6,7 +6,7 @@
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
-    "build:apk": "npx eas build -p android --profile preview",
+    "build:apk": "eas build -p android --profile preview",
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint"
@@ -48,6 +48,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
+    "eas-cli": "^18.12.1",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"

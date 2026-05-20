@@ -5,9 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -18,7 +16,13 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { BreakageModal, CapitalAdjustmentModal, CapitalModal, ExpenseModal, WithdrawalModal } from '../components/finance/FinanceEntryModals';
+import {
+  BreakageModal,
+  CapitalAdjustmentModal,
+  CapitalModal,
+  ExpenseModal,
+  WithdrawalModal,
+} from '../components/finance/FinanceEntryModals';
 import ScreenHeader from '../components/ScreenHeader';
 import { useAppTheme } from '../context/AppThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -46,10 +50,19 @@ function formatLedgerAmount(type, amount) {
   const raw = Number(amount) || 0;
   const x = Math.abs(raw);
   const s = `$${x.toFixed(2)}`;
-  if (['expense', 'withdrawal', 'breakage', 'stock_purchase', 'stock_adjustment', 'sale_reversal', 'profit_reversal'].includes(type)) {
+  if (
+    ['expense', 'withdrawal', 'breakage', 'stock_purchase', 'stock_adjustment', 'sale_reversal', 'profit_reversal'].includes(
+      type
+    )
+  ) {
     return `−${s}`;
   }
-  const isIn = type === 'profit' || type === 'capital' || type === 'stock_reversal' || type === 'capital_adjustment';
+  const isIn =
+    type === 'profit' ||
+    type === 'capital' ||
+    type === 'stock_reversal' ||
+    type === 'capital_adjustment' ||
+    type === 'breakage_reversal';
   return isIn ? `+${s}` : `−${s}`;
 }
 
@@ -87,12 +100,6 @@ export default function FinanceScreen() {
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const [editLedgerOpen, setEditLedgerOpen] = useState(false);
-  const [editingEntry, setEditingEntry] = useState(null);
-  const [editEntryAmount, setEditEntryAmount] = useState('');
-  const [editEntryDate, setEditEntryDate] = useState('');
-  const [editEntryDesc, setEditEntryDesc] = useState('');
-  const [editEntryNotes, setEditEntryNotes] = useState('');
 
   const ledgerRange = useMemo(() => {
     if (filterId === 'all') return { start: null, end: null };
@@ -126,14 +133,22 @@ export default function FinanceScreen() {
             end = ledgerRange.end;
           }
         }
-        const [sum, prods, led] = await Promise.all([
+        const [sum, prods, led, recoveredBreakageIds] = await Promise.all([
           financeService.getFinanceSummary(user.id, start, end),
           productService.getActiveProducts(user.id),
           financeService.getLedger(user.id, start, end),
+          financeService.getRecoveredBreakageFinanceIds(user.id),
         ]);
+        const recoveredSet = new Set(recoveredBreakageIds.map((id) => Number(id)));
         setSummary(sum);
         setProducts(prods);
-        setLedger(led);
+        setLedger(
+          led.map((row) => ({
+            ...row,
+            _breakageAlreadyRecovered:
+              row.type === 'breakage' && recoveredSet.has(Number(row.id)),
+          }))
+        );
       } catch (e) {
         console.error(e);
         Alert.alert('Error', e?.message ?? 'Could not load finance data.');
@@ -324,8 +339,9 @@ export default function FinanceScreen() {
       Alert.alert('Invalid date', 'Use YYYY-MM-DD.');
       return;
     }
-    if (!String(data.reason || '').trim()) {
-      Alert.alert('Required', 'Enter a reason.');
+    const reasonTrim = String(data.reason || '').trim();
+    if (!financeService.BREAKAGE_REASON_OPTIONS.includes(reasonTrim)) {
+      Alert.alert('Required', 'Choose a reason: Damaged, Expired, or Lost.');
       return;
     }
     setSaving(true);
@@ -334,7 +350,7 @@ export default function FinanceScreen() {
         userId: user.id,
         productId: data.productId,
         quantity: data.quantity,
-        reason: data.reason,
+        reason: reasonTrim,
         occurredOn: a,
         notes: data.notes,
       });
@@ -387,13 +403,12 @@ export default function FinanceScreen() {
         compact: true,
       },
       {
-        key: 'low-stock',
-        label: 'Low Stock Count',
-        value: summary?.current?.lowStockCount ?? 0,
-        icon: 'alert-circle-outline',
-        tone: 'red',
-        isCount: true,
-        hint: 'Products <= 5',
+        key: 'expected-net-profit',
+        label: 'Expected Net Profit',
+        value: summary?.current?.expectedNetProfit ?? 0,
+        icon: 'stats-chart-outline',
+        tone: 'profit',
+        hint: 'All-time + Incoming',
         compact: true,
       },
     ],
@@ -427,11 +442,19 @@ export default function FinanceScreen() {
     const type = item.type;
     const t = financeService.typeLabel(type);
     const isCapitalSubtract =
-      type === 'capital_adjustment' && String(item.notes || '').startsWith('[subtract]');
+      type === 'capital_adjustment' &&
+      (item.capital_source === 'subtract' ||
+        (!item.capital_source && String(item.notes || '').startsWith('[subtract]')));
     const isOutflow =
-      ['expense', 'withdrawal', 'breakage', 'stock_purchase', 'stock_adjustment', 'sale_reversal', 'profit_reversal'].includes(
-        type
-      ) || isCapitalSubtract;
+      [
+        'expense',
+        'withdrawal',
+        'breakage',
+        'stock_purchase',
+        'stock_adjustment',
+        'sale_reversal',
+        'profit_reversal',
+      ].includes(type) || isCapitalSubtract;
     const isIn = !isOutflow;
     return (
       <View style={[styles.ledgerRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -451,7 +474,7 @@ export default function FinanceScreen() {
             {item.notes}
           </Text>
         ) : null}
-        {type === 'breakage' && item.product_name ? (
+        {(type === 'breakage' || type === 'breakage_reversal') && item.product_name ? (
           <Text style={[styles.ledgerSub, { color: colors.textMuted }]}>
             Product: {item.product_name} · Qty: {item.quantity}
           </Text>
@@ -463,22 +486,51 @@ export default function FinanceScreen() {
           {isCapitalSubtract ? `−$${Math.abs(Number(item.amount) || 0).toFixed(2)}` : formatLedgerAmount(type, item.amount)}
         </Text>
         <View style={styles.ledgerActions}>
-          <Pressable
-            onPress={() => {
-              setEditingEntry(item);
-              setEditEntryAmount(String(item.amount ?? ''));
-              setEditEntryDate(String(item.occurred_on ?? ''));
-              setEditEntryDesc(String(item.description ?? ''));
-              setEditEntryNotes(String(item.notes ?? ''));
-              setEditLedgerOpen(true);
-            }}
-            style={({ pressed }) => [
-              styles.ledgerActionBtn,
-              { borderColor: colors.border, backgroundColor: colors.inputBg, opacity: pressed ? 0.82 : 1 },
-            ]}>
-            <Ionicons name="create-outline" size={14} color={colors.primary} />
-            <Text style={[styles.ledgerActionText, { color: colors.text }]}>Edit</Text>
-          </Pressable>
+          {type === 'breakage' &&
+          item.product_id != null &&
+          item.product_name &&
+          !item._breakageAlreadyRecovered ? (
+            <Pressable
+              onPress={() => {
+                const name = String(item.product_name || '').trim() || 'this product';
+                const qty = Math.max(0, Math.floor(Number(item.quantity) || 0));
+                const amt = formatMoney(item.amount);
+                Alert.alert(
+                  'Mark as recovered?',
+                  `Confirm that ${name} was not actually lost or damaged. This will add ${qty} unit(s) back to inventory and reduce breakage loss by ${amt}.`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Yes, recovered',
+                      onPress: async () => {
+                        if (!user?.id) return;
+                        setSaving(true);
+                        try {
+                          await financeService.recoverBreakageFromLedger(user.id, item.id);
+                          await load({ soft: true });
+                          await notifyDataChanged();
+                        } catch (e) {
+                          Alert.alert('Could not recover', e?.message ?? 'Try again.');
+                        } finally {
+                          setSaving(false);
+                        }
+                      },
+                    },
+                  ]
+                );
+              }}
+              style={({ pressed }) => [
+                styles.ledgerActionBtn,
+                {
+                  borderColor: colors.success ?? '#067647',
+                  backgroundColor: colors.inputBg,
+                  opacity: pressed ? 0.82 : 1,
+                },
+              ]}>
+              <Ionicons name="arrow-undo-outline" size={14} color={colors.success ?? '#067647'} />
+              <Text style={[styles.ledgerActionText, { color: colors.success ?? '#067647' }]}>Recovered</Text>
+            </Pressable>
+          ) : null}
           <Pressable
             onPress={() =>
               Alert.alert('Hide entry?', 'This removes the row from your ledger view only. Totals and capital are not changed.', [
@@ -719,74 +771,6 @@ export default function FinanceScreen() {
           </View>
         </View>
       </Modal>
-      <Modal visible={editLedgerOpen} transparent animationType="fade" onRequestClose={() => setEditLedgerOpen(false)}>
-        <KeyboardAvoidingView style={styles.actionModalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <Pressable style={styles.actionBackdrop} onPress={() => setEditLedgerOpen(false)} />
-          <View style={[styles.actionSheet, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[styles.actionSheetTitle, { color: colors.text }]}>Edit Ledger Entry</Text>
-            <TextInput
-              value={editEntryAmount}
-              onChangeText={setEditEntryAmount}
-              keyboardType="decimal-pad"
-              placeholder="Amount"
-              placeholderTextColor={colors.textMuted}
-              style={[styles.inputSm, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text, marginHorizontal: 10, marginBottom: 8 }]}
-            />
-            <TextInput
-              value={editEntryDate}
-              onChangeText={setEditEntryDate}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor={colors.textMuted}
-              style={[styles.inputSm, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text, marginHorizontal: 10, marginBottom: 8 }]}
-            />
-            <TextInput
-              value={editEntryDesc}
-              onChangeText={setEditEntryDesc}
-              placeholder="Description"
-              placeholderTextColor={colors.textMuted}
-              style={[styles.inputSm, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text, marginHorizontal: 10, marginBottom: 8 }]}
-            />
-            <TextInput
-              value={editEntryNotes}
-              onChangeText={setEditEntryNotes}
-              placeholder="Notes"
-              placeholderTextColor={colors.textMuted}
-              multiline
-              style={[styles.inputSm, { borderColor: colors.border, backgroundColor: colors.inputBg, color: colors.text, marginHorizontal: 10, marginBottom: 10, minHeight: 72, textAlignVertical: 'top' }]}
-            />
-            <View style={styles.editLedgerButtons}>
-              <Pressable onPress={() => setEditLedgerOpen(false)} style={[styles.editLedgerBtn, { borderColor: colors.border }]}>
-                <Text style={[styles.editLedgerBtnText, { color: colors.text }]}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={async () => {
-                  if (!user?.id || !editingEntry) return;
-                  const d = parseYmd(editEntryDate);
-                  const amount = parseFloat(String(editEntryAmount).replace(',', '.'));
-                  if (!d) return Alert.alert('Invalid date', 'Use YYYY-MM-DD.');
-                  if (Number.isNaN(amount) || amount < 0) return Alert.alert('Invalid amount', 'Use a valid number.');
-                  try {
-                    await financeService.updateLedgerEntry(user.id, editingEntry.id, {
-                      amount,
-                      occurredOn: d,
-                      description: editEntryDesc,
-                      notes: editEntryNotes,
-                    });
-                    setEditLedgerOpen(false);
-                    setEditingEntry(null);
-                    await load({ soft: true });
-                    await notifyDataChanged();
-                  } catch (e) {
-                    Alert.alert('Update failed', e?.message ?? 'Could not update entry.');
-                  }
-                }}
-                style={[styles.editLedgerBtn, { backgroundColor: colors.primary, borderColor: colors.primary }]}>
-                <Text style={[styles.editLedgerBtnText, { color: colors.onPrimary }]}>Save</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
 
       <ExpenseModal
         visible={expenseOpen}
@@ -951,9 +935,6 @@ function makeStyles() {
       gap: 4,
     },
     ledgerActionText: { fontSize: 12, fontWeight: '700' },
-    editLedgerButtons: { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingBottom: 10 },
-    editLedgerBtn: { flex: 1, borderWidth: 1, borderRadius: 10, minHeight: 38, alignItems: 'center', justifyContent: 'center' },
-    editLedgerBtnText: { fontSize: 13, fontWeight: '800' },
     emptyLedger: { textAlign: 'center', padding: 20, fontSize: 15 },
   });
 }
