@@ -1,0 +1,17 @@
+# TillMate API on Render — deploy only ./backend (not the Expo mobile app).
+# Dashboard: New > Blueprint, or link this repo and apply the blueprint.
+services:
+  - type: web
+    name: tillmate-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Set in Render dashboard (or sync from a secret store):
+      # - MONGODB_URI
+      # - JWT_SECRET
+      # - ADMIN_EMAIL / ADMIN_PASSWORD (optional)

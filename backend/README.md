@@ -2,6 +2,24 @@
 
 Central service for **mobile batch sync**, **backup**, and **admin read APIs**.
 
+## Deploy on Render
+
+This folder is a **standalone Node API**. The Expo app lives in the repo root — do not use the root `package.json` start command on Render.
+
+| Setting | Value |
+|---------|--------|
+| **Root Directory** | `backend` |
+| **Build Command** | `npm install` |
+| **Start Command** | `npm start` (runs `node src/server.js`) |
+
+Do **not** use `node .`, `node expo-router/entry`, or `expo start` — those come from the mobile app and cause:
+
+`Cannot find module '.../backend/expo-router/entry'`
+
+**Environment variables** (required): `MONGODB_URI`, `JWT_SECRET`. Optional: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `PORT` (Render sets `PORT` automatically).
+
+You can also deploy via the repo root [`render.yaml`](../render.yaml) blueprint.
+
 ## Setup
 
 ```bash
